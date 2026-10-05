@@ -26,8 +26,12 @@ export type SearchParams = {
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, { signal });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(typeof body.error === 'string' ? body.error : `${path} returned ${response.status}`);
+    const body: unknown = await response.json().catch(() => null);
+    throw new Error(
+      typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
+        ? body.error
+        : `${path} returned ${response.status}`
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -45,5 +49,6 @@ export const historyApi = {
   },
   filters: (signal?: AbortSignal) => get<FiltersResponse>('/api/filters', signal),
   session: (id: number, signal?: AbortSignal) => get<SessionDetail>(`/api/sessions/${id}`, signal),
-  raw: (itemId: number, signal?: AbortSignal) => get<RawRecordResponse>(`/api/items/${itemId}/raw`, signal),
+  raw: (itemId: number, signal?: AbortSignal) =>
+    get<RawRecordResponse>(`/api/items/${itemId}/raw`, signal),
 };

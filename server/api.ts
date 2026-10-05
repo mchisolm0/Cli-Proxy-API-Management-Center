@@ -2,16 +2,10 @@
 // Dependency-free so the UI type-checks without Bun types. Server handlers
 // must return these shapes; change both sides together.
 
-export type FailureClass =
-  | "auth"
-  | "quota"
-  | "upstream"
-  | "transport"
-  | "client"
-  | "other";
+export type FailureClass = 'auth' | 'quota' | 'upstream' | 'transport' | 'client' | 'other';
 export type ClassCounts = Record<FailureClass, number>;
 export type Percentiles = { p50: number | null; p95: number | null };
-export type HealthWindow = "1h" | "24h" | "7d";
+export type HealthWindow = '1h' | '24h' | '7d';
 
 type Traffic = {
   requests: number;
@@ -126,7 +120,12 @@ export type SessionSummary = {
   itemCount: number;
 };
 
-export type SearchResponse = { sessions: SessionSummary[]; total: number };
+export type SearchResponse = {
+  sessions: SessionSummary[];
+  total: number;
+  /** Plain text excerpts keyed by session ID, present when searching. */
+  snippets?: Record<string, string>;
+};
 
 export type SessionItem = {
   id: number;

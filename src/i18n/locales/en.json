@@ -2225,5 +2225,116 @@
     "unavailable": "Resets are currently unavailable.",
     "rate_limited": "Request rate limited.",
     "auth_error": "Authorization was refused."
+  },
+  "history": {
+    "loading": "Loading…",
+    "load_error": "History could not be loaded.",
+    "refresh": "Refresh",
+    "unknown_time": "Unknown date",
+    "windows": {
+      "1h": "1h",
+      "24h": "24h",
+      "7d": "7d"
+    }
+  },
+  "sessions": {
+    "title": "Sessions",
+    "search": "Search sessions",
+    "any": "Any",
+    "count_one": "{{count}} session",
+    "count_other": "{{count}} sessions",
+    "empty": "No sessions match.",
+    "back": "Back to results",
+    "transcript": "Session transcript",
+    "raw_record": "Raw record",
+    "input": "Input",
+    "output": "Output",
+    "no_output": "No output recorded.",
+    "no_items": "No transcript recorded.",
+    "truncated": "Excerpt of {{count}} characters. Open the raw record for the full text.",
+    "shortcuts": "/ search · j/k move · Enter open · Esc back · UTC",
+    "invalid_id": "Invalid session ID.",
+    "pagination": "Search pages",
+    "previous": "Previous",
+    "next": "Next",
+    "range": "{{from}}–{{to}} of {{total}}",
+    "filters": {
+      "client": "Client",
+      "host": "Host",
+      "model": "Model",
+      "cwd": "Repo / cwd",
+      "from": "From",
+      "to": "To"
+    },
+    "clients": {
+      "codex": "Codex",
+      "claude": "Claude Code",
+      "opencode": "OpenCode",
+      "t3": "T3 Code"
+    },
+    "roles": {
+      "user": "User",
+      "assistant": "Assistant",
+      "system": "System",
+      "thinking": "Thinking",
+      "tool_call": "Tool call",
+      "tool_result": "Tool output"
+    }
+  },
+  "problems": {
+    "title": "Problems",
+    "back": "Back to problems",
+    "window": "Time window",
+    "count": "Failures / events",
+    "sessions": "Sessions",
+    "last_seen": "Last seen, UTC",
+    "retried": "Retried attempts",
+    "inferred_final": "Inferred final failures",
+    "unresolved": "Unresolved attempts",
+    "attempt_errors": "Uncorrelated errors",
+    "examples": "Sanitized examples",
+    "empty": "No problems in this window.",
+    "no_examples": "No examples recorded.",
+    "no_sessions": "No indexed sessions linked.",
+    "unindexed_one": "{{count}} unindexed",
+    "unindexed_other": "{{count}} unindexed",
+    "more_sessions_one": "+{{count}} more session",
+    "more_sessions_other": "+{{count}} more sessions",
+    "failure_count_one": "{{count}} failure / event",
+    "failure_count_other": "{{count}} failures / events",
+    "session_count_one": "{{count}} session",
+    "session_count_other": "{{count}} sessions",
+    "inference_note": "Final outcomes are inferred from attempts. A later retry may revise them. Error-channel records cannot be linked to retries.",
+    "classes": {
+      "auth": "Auth",
+      "quota": "Quota",
+      "upstream": "Upstream",
+      "transport": "Transport",
+      "client": "Client",
+      "other": "Other"
+    },
+    "explanations": {
+      "auth": "A credential or management login was rejected.",
+      "quota": "A request hit a rate limit or exhausted quota.",
+      "upstream": "The provider failed to complete the request.",
+      "transport": "The connection to the provider failed.",
+      "client": "The client request was invalid or canceled.",
+      "other": "An observed issue needs review."
+    },
+    "sources": {
+      "usage_event": "Requests",
+      "error_event": "Proxy errors",
+      "auth": "Credentials",
+      "dashboard": "History server",
+      "friction": "Friction",
+      "sandpaper": "Sandpaper"
+    },
+    "outcomes": {
+      "retried": "Retried",
+      "inferred_final": "Inferred final failure",
+      "unresolved": "Unresolved",
+      "attempt_error": "Uncorrelated error",
+      "state": "State change"
+    }
   }
 }

@@ -1,29 +1,30 @@
-# cpa-dashboard
+# History server
 
 A dashboard for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI): search archived Codex, Claude Code, OpenCode and T3 Code sessions, see provider and credential health, and rank problems by cause (auth, quota, upstream, transport).
 
-It runs beside an unmodified CLIProxyAPI and reads its usage and error pub/sub streams and `/v0/management/auth-files`. It does not proxy model traffic. Session history comes from an archive of native client records, not from the gateway, so it includes tool calls and sessions that never touched the proxy.
+It runs beside an unmodified CLIProxyAPI and reads its usage and error pub/sub streams and `/v8/management/credentials`. It does not proxy model traffic. Session history comes from an archive of native client records, not from the gateway, so it includes tool calls and sessions that never touched the proxy.
 
 ## Credits
 
-Built for and against [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), whose payload contracts it follows (see How it works). The management panel shipped with it, [Cli-Proxy-API-Management-Center](https://github.com/router-for-me/Cli-Proxy-API-Management-Center), was the starting point for deciding what a dashboard should show. No code is copied from either project.
+Built for and against [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), whose payload contracts it follows (see How it works). The management panel shipped with it, [Cli-Proxy-API-Management-Center](https://github.com/router-for-me/Cli-Proxy-API-Management-Center), was the starting point for deciding what a dashboard should show. This server was copied from [mchisolm0/cpa-dashboard](https://github.com/mchisolm0/cpa-dashboard) and integrated into the CPAMC fork. Deployment and the v8 contract comparison are documented in [FORK.md](../FORK.md).
 
 ## Quick start
 
 ```sh
-bun install
-bun run fixtures   # synthetic archive, telemetry and friction
-bun run index
-bun run start
+bun install --frozen-lockfile
+bun run build
+bun run server:fixtures   # synthetic archive, telemetry and friction
+bun run server:index
+bun run server:start
 ```
 
-Open http://127.0.0.1:3000. `1` Sessions, `2` Health, `3` Problems. `/` searches, `j`/`k` select, Enter opens, Esc closes. Quote phrases in search. Times use UTC. `bun run dev` starts Vite with an API proxy to port 3000.
+Open http://127.0.0.1:3000. The server serves the fork's single-file `dist/index.html`. In Sessions, `/` searches, `j`/`k` select, Enter opens, and Esc closes. Quote phrases in search. Times use UTC. Frontend route wiring belongs to the shell integration.
 
 ## Deploy
 
-[`examples/`](examples) runs the proxy, the dashboard and Caddy on one origin: `/`, `/assets/*` and `/api/*` go to the dashboard, everything else reaches the proxy unchanged, including `/v1` WebSockets. The dashboard has no login, and transcripts can contain secrets. Keep it on a private network or behind authentication.
+Route exactly `/`, `/api/*`, and `/healthz` to this server. Route everything else to CLIProxyAPI unchanged, including management requests and `/v1` WebSockets. Other paths return 404 here. No external UI assets are required. The dashboard has no login, and transcripts can contain secrets. Keep it on a private network or behind authentication.
 
-Telemetry needs `usage-statistics-enabled: true` and remote management with a key in the proxy config. Raising `redis-usage-queue-retention-seconds` keeps records across dashboard restarts.
+Telemetry needs `observability.usage.usage-statistics-enabled: true` and `management.secret-key` in the v8 proxy config. Remote connections may need `management.allow-remote: true`. Queue retention is `observability.usage.redis-usage-queue-retention-seconds`; subscribers have no replay.
 
 ## Archive layout
 
@@ -34,7 +35,7 @@ Telemetry needs `usage-statistics-enabled: true` and remote management with a ke
 - `.local/share/opencode/opencode.db`
 - `.t3/userdata/state.sqlite`
 
-Each snapshot needs a `manifest.json` written last, with `completed_at` (ISO time) and `sources` (`[{ "path", "status": "collected" | "missing" }]`). Copy SQLite databases with the online backup API rather than copying live files. Snapshots without a manifest are skipped. `bun run fixtures` generates a complete example.
+Each snapshot needs a `manifest.json` written last, with `completed_at` (ISO time) and `sources` (`[{ "path", "status": "collected" | "missing" }]`). Copy SQLite databases with the online backup API rather than copying live files. Snapshots without a manifest are skipped. `bun run server:fixtures` generates a complete example.
 
 ## Configuration
 
@@ -60,7 +61,7 @@ Health shows provider totals and credential rows: auth state, quota, retry/refre
 
 Problems groups by source/provider/model/class/code, ranked by count then recency. Selecting a row shows five sanitized examples, a suggested fix, and up to 20 matching indexed sessions. Session totals deduplicate indexed native/T3 aliases and include unmatched raw IDs; details show `N + M unindexed`, and capped indexed lists show `+N more`. Auth problems count newly introduced issues in transitions. Friction groups normalized expected/actual text; event hashes and varying paths do not split groups. Doctor blobs and historical-import metadata are omitted. Re-reading files does not duplicate entries.
 
-CPA v7.3.9 emits upstream attempts, not definitive client-completion records. Websocket turns share a `request_id`. A later attempt with that ID counts as a retry only when it starts within 35 seconds after the failed attempt ends, using `timestamp + latency_ms`. Set `CPA_RETRY_WINDOW_SECONDS` to match longer proxy backoffs; startup rejects values that are not finite and positive. An unmatched failed usage record becomes an **inferred final** after `max(60s, retry window + 5s)` from receipt. Missing IDs, tied timestamps, and recent attempts stay unresolved. Later retries can revise this inference. Error records have no request/session IDs and remain uncorrelated attempts; `retryable` does not prove a retry or a final failure. Classification uses the event's code, HTTP status and body; credential quota cannot classify an attempt. Same-model quota can clarify 403 responses.
+CPA v7.3.9 and v8.0.15 emit upstream attempts, not definitive client-completion records. Websocket turns share a `request_id`. v8 also adds `trace_id` and per-attempt `execution_id`. Correlation prefers `trace_id`, falling back to `request_id`, and never groups by `execution_id`. A later attempt with that correlation ID counts as a retry only when it starts within 35 seconds after the failed attempt ends, using `timestamp + latency_ms`. Set `CPA_RETRY_WINDOW_SECONDS` to match longer proxy backoffs; startup rejects values that are not finite and positive. An unmatched failed usage record becomes an **inferred final** after `max(60s, retry window + 5s)` from receipt. Missing IDs, tied timestamps, and recent attempts stay unresolved. Later retries can revise this inference. Error records have no request/session IDs and remain uncorrelated attempts; `retryable` does not prove a retry or a final failure. Classification uses the event's code, HTTP status and body; credential quota cannot classify an attempt. Same-model quota can clarify 403 responses.
 
 CPA source contracts:
 
@@ -81,11 +82,11 @@ API: `GET /api/health?window=24h`, `/api/problems?window=24h`, `/healthz`, `/api
 
 ```sh
 bun test
-bun run typecheck
+bun run server:type-check
 bun run build
-docker build -t cpa-dashboard .
+docker build -t ai-pool .
 docker run --rm -p 127.0.0.1:3000:3000 \
-  -v /path/to/archive:/archive:ro -v dashboard-index:/index cpa-dashboard
+  -v /path/to/archive:/archive:ro -v ai-pool-index:/index ai-pool
 ```
 
-The image builds the UI and runs as user `bun`. Its healthcheck uses `PORT` with a 30s start period. Mount a root-owned compose secret readable by that user and set `CPA_MANAGEMENT_KEY_FILE=/run/secrets/cpa_management_key`; archive/friction mounts should be read-only. The index volume must be writable by `bun`. HTTP has no authentication; use loopback or an authenticated private gateway. Fixtures and tests need no live system.
+The image builds the UI and runs as UID/GID 1000. Its healthcheck uses `PORT` with a 30s start period. Mount a root-owned compose secret readable by that user and set `CPA_MANAGEMENT_KEY_FILE=/run/secrets/cpa_management_key`; archive/friction mounts should be read-only. The index volume must be writable by UID 1000. HTTP has no authentication; use loopback or an authenticated private gateway. Fixtures and tests need no live system.

@@ -1,17 +1,14 @@
-import type { Database } from "bun:sqlite";
-import { json, object, string, number, timestamp } from "../model";
+import type { Database } from 'bun:sqlite';
+import { json, object, string, number, timestamp } from '../model';
 
-export type ErrorClass =
-  "auth" | "quota" | "upstream" | "transport" | "client" | "other";
-export function transport(
-  event: Record<string, unknown>,
-): "websocket" | "http" | "unknown" {
+export type ErrorClass = 'auth' | 'quota' | 'upstream' | 'transport' | 'client' | 'other';
+export function transport(event: Record<string, unknown>): 'websocket' | 'http' | 'unknown' {
   if (
     /^GET\s+\/v1\/responses(?:\?|$)/i.test(string(event.endpoint)) ||
-    string(event.executor_type) === "CodexWebsocketsExecutor"
+    string(event.executor_type) === 'CodexWebsocketsExecutor'
   )
-    return "websocket";
-  return string(event.endpoint) ? "http" : "unknown";
+    return 'websocket';
+  return string(event.endpoint) ? 'http' : 'unknown';
 }
 export function cooldownReason(event: Record<string, unknown>): string {
   const status = object(event.auth_status),
@@ -29,88 +26,70 @@ export function classify(event: Record<string, unknown>): ErrorClass {
     body = string(event.body).toLowerCase(),
     status = number(event.status_code);
   // CPA lifecycle errors include client cancellation as well as transport drops.
-  if (code === "connection_lifecycle") {
-    if (body.includes("context canceled")) return "client";
-    return body.includes("context deadline exceeded") ? "upstream" : "transport";
+  if (code === 'connection_lifecycle') {
+    if (body.includes('context canceled')) return 'client';
+    return body.includes('context deadline exceeded') ? 'upstream' : 'transport';
   }
-  if (code === "transient_transport") return "transport";
-  if (
-    [
-      "request_scoped",
-      "model_not_found",
-      "model_not_supported",
-      "not_found",
-    ].includes(code)
-  )
-    return "client";
-  if (code === "transient_error") return "upstream";
+  if (code === 'transient_transport') return 'transport';
+  if (['request_scoped', 'model_not_found', 'model_not_supported', 'not_found'].includes(code))
+    return 'client';
+  if (code === 'transient_error') return 'upstream';
+  // v8 recognizes invalid_grant even without an HTTP status. Error events then
+  // use 500 as their fallback status, but the credential still needs re-authentication.
+  if (code === 'invalid_grant' || /\binvalid_grant\b/.test(body)) return 'auth';
   const hint = `${code} ${body}`;
-  if (status === 401) return "auth";
-  if (status === 402 || status === 429) return "quota";
+  if (status === 401) return 'auth';
+  if (status === 402 || status === 429) return 'quota';
   if (status === 403) {
     const model = object(object(event.auth_status).model);
     if (
       (object(model.quota).exceeded === true &&
-        string(model.name) !== "" &&
+        string(model.name) !== '' &&
         model.name === event.model) ||
       /quota|rate_limit|payment_required/.test(hint)
     )
-      return "quota";
-    return /cloudflare/.test(hint) ? "upstream" : "auth";
+      return 'quota';
+    return /cloudflare/.test(hint) ? 'upstream' : 'auth';
   }
-  if (status >= 500 || status === 408) return "upstream";
-  if (status >= 400 && status < 500) return "client";
-  if (body.includes("context deadline exceeded")) return "upstream";
-  if (
-    /unauthorized|invalid_grant|invalid_api_key|authentication|credential_revoked/.test(
-      hint,
-    )
-  )
-    return "auth";
-  if (/quota|rate_limit|payment_required/.test(hint)) return "quota";
-  if (
-    /websocket|connection|transport|broken_pipe|eof|tls|network|timeout/.test(
-      hint,
-    )
-  )
-    return "transport";
-  if (
-    /request_scoped|invalid_request|context_length|model_not_found|client/.test(
-      code,
-    )
-  )
-    return "client";
-  if (/upstream|cloudflare/.test(hint)) return "upstream";
-  if (/invalid_request|context_length|model_not_found|client/.test(hint))
-    return "client";
-  return "other";
+  if (status >= 500 || status === 408) return 'upstream';
+  if (status >= 400 && status < 500) return 'client';
+  if (body.includes('context deadline exceeded')) return 'upstream';
+  if (/unauthorized|invalid_grant|invalid_api_key|authentication|credential_revoked/.test(hint))
+    return 'auth';
+  if (/quota|rate_limit|payment_required/.test(hint)) return 'quota';
+  if (/websocket|connection|transport|broken_pipe|eof|tls|network|timeout/.test(hint))
+    return 'transport';
+  if (/request_scoped|invalid_request|context_length|model_not_found|client/.test(code))
+    return 'client';
+  if (/upstream|cloudflare/.test(hint)) return 'upstream';
+  if (/invalid_request|context_length|model_not_found|client/.test(hint)) return 'client';
+  return 'other';
 }
 export function sanitize(value: unknown, secrets: string[] = []): unknown {
   if (Array.isArray(value)) return value.map((v) => sanitize(v, secrets));
-  if (typeof value === "string") {
+  if (typeof value === 'string') {
     let text = value;
-    for (const secret of secrets)
-      if (secret) text = text.replaceAll(secret, "[redacted]");
-    const safe = text.replace(/Bearer\s+[^\s"']+/gi, "Bearer [redacted]");
+    for (const secret of secrets) if (secret) text = text.replaceAll(secret, '[redacted]');
+    const safe = text.replace(/Bearer\s+[^\s"']+/gi, 'Bearer [redacted]');
     try {
       const parsed: unknown = JSON.parse(safe);
-      if (parsed !== null && typeof parsed === "object")
+      if (parsed !== null && typeof parsed === 'object')
         return JSON.stringify(sanitize(parsed, secrets));
     } catch {
       /* Error bodies may be plain text. */
     }
     return safe;
   }
-  if (value === null || typeof value !== "object") return value;
+  if (value === null || typeof value !== 'object') return value;
   return Object.fromEntries(
     Object.entries(object(value))
       .filter(
         ([key]) =>
           !/^(api_key|user_api_key|authorization|x-management-key|management_key|access_token|refresh_token|id_token|password|secret|cookie|set-cookie)$/i.test(
-            key,
-          ),
+            key
+          )
       )
-      .map(([key, v]) => [key, sanitize(v, secrets)]),
+      .map(([key, v]) => [key, sanitize(v, secrets)])
   );
 }
 export function telemetryTables(db: Database) {
@@ -123,24 +102,20 @@ export function telemetryTables(db: Database) {
 }
 export function appendEvent(
   db: Database,
-  channel: "usage" | "errors",
+  channel: 'usage' | 'errors',
   payload: string,
   received = Date.now(),
-  secrets: string[] = [],
+  secrets: string[] = []
 ) {
   const event = object(sanitize(json(payload), secrets));
   // CPA's usage source can be the raw upstream API key.
-  if (channel === "usage") {
+  if (channel === 'usage') {
     delete event.source;
     delete event.response_headers;
   }
-  if (
-    channel === "usage" &&
-    (event.support_refresh === true || event.refresh === true)
-  )
-    return;
+  if (channel === 'usage' && (event.support_refresh === true || event.refresh === true)) return;
   const time = timestamp(event.timestamp);
-  if (!time) throw new Error("Telemetry requires a valid timestamp");
+  if (!time) throw new Error('Telemetry requires a valid timestamp');
   const common = [
     received,
     time,
@@ -150,19 +125,19 @@ export function appendEvent(
     transport(event),
   ] as const;
   const safe = JSON.stringify(sanitize(event));
-  if (channel === "usage")
+  if (channel === 'usage')
     db.query(
-      "INSERT INTO usage_event(received,time,provider,model,authIndex,transport,payload) VALUES(?,?,?,?,?,?,?)",
+      'INSERT INTO usage_event(received,time,provider,model,authIndex,transport,payload) VALUES(?,?,?,?,?,?,?)'
     ).run(...common, safe);
   else
     db.query(
-      "INSERT INTO error_event(received,time,provider,model,authIndex,transport,category,status,code,cooldownReason,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+      'INSERT INTO error_event(received,time,provider,model,authIndex,transport,category,status,code,cooldownReason,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)'
     ).run(
       ...common,
       classify(event),
       number(event.status_code),
       string(event.code),
       cooldownReason(event),
-      safe,
+      safe
     );
 }
