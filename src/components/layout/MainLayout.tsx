@@ -306,7 +306,9 @@ const THEME_CARDS: Array<{
   },
 ];
 
-export function MainLayout() {
+export { PoolLayout as MainLayout } from '@/features/shell/PoolLayout';
+
+export function LegacyMainLayout() {
   const { t } = useTranslation();
   const { showNotification } = useNotificationStore();
   const location = useLocation();

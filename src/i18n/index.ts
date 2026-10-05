@@ -18,7 +18,7 @@ i18n.use(initReactI18next).init({
     ru: { translation: ru },
   },
   lng: getInitialLanguage(),
-  fallbackLng: 'zh-CN',
+  fallbackLng: ['en', 'zh-CN'],
   interpolation: {
     escapeValue: false, // React 已经转义
   },
