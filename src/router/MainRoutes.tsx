@@ -13,9 +13,17 @@ import { ConfigPage } from '@/features/config/ConfigPage';
 import { LogsPage } from '@/features/logs/LogsPage';
 import { SystemPage } from '@/pages/SystemPage';
 import { useAuthStore } from '@/stores';
+import { HomePage } from '@/features/home/HomePage';
+import { ProviderWorkspacePage, ProvidersPage } from '@/features/providerWorkspace/ProviderWorkspacePage';
+import { SessionsPage } from '@/features/sessions/SessionsPage';
+import { ProblemsPage } from '@/features/problems/ProblemsPage';
 
 const createMainRoutes = (supportsPlugin: boolean) => [
-  { path: '/', element: <DashboardPage /> },
+  { path: '/', element: <HomePage /> },
+  { path: '/providers', element: <ProvidersPage /> },
+  { path: '/providers/:provider', element: <ProviderWorkspacePage /> },
+  { path: '/sessions', element: <SessionsPage /> },
+  { path: '/problems', element: <ProblemsPage /> },
   { path: '/dashboard', element: <DashboardPage /> },
   { path: '/settings', element: <Navigate to="/config" replace /> },
   { path: '/api-keys', element: <Navigate to="/config" replace /> },

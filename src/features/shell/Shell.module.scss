@@ -1,0 +1,229 @@
+.shell {
+  height: 100%;
+  display: grid;
+  grid-template: 56px minmax(0, 1fr) / 216px minmax(0, 1fr);
+  font-size: 14px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  --header-height: 56px;
+
+  button,
+  a,
+  summary,
+  input {
+    &:focus-visible {
+      outline: 2px solid var(--text-secondary);
+      outline-offset: 3px;
+    }
+  }
+}
+.topbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}
+.brand {
+  width: 168px;
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.5px;
+}
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  margin-left: auto;
+  padding: 7px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  kbd {
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+}
+.headerAction,
+.mobileToggle {
+  color: var(--text-secondary);
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.mobileToggle {
+  display: none;
+}
+.sidebar {
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 12px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  nav {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    min-height: 40px;
+    border-radius: 3px;
+  }
+  a:hover {
+    background: var(--bg-hover);
+  }
+  .active {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+}
+.providers {
+  margin: 0 0 10px 6px;
+  a {
+    padding: 9px 8px;
+  }
+  a > span:nth-child(2) {
+    flex: 1;
+    overflow-wrap: anywhere;
+  }
+  small {
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+}
+.dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-quaternary);
+  &[data-status='ok'] {
+    background: var(--success-color);
+  }
+  &[data-status='warning'] {
+    background: var(--warning-text);
+  }
+}
+.divider {
+  margin: 14px 12px;
+  border-top: 1px solid var(--border-color);
+}
+.advanced {
+  margin-top: 18px;
+  summary {
+    cursor: pointer;
+    padding: 8px 12px;
+    color: var(--text-tertiary);
+  }
+  a {
+    font-size: 13px;
+  }
+}
+.version {
+  margin-top: auto;
+  padding: 28px 12px 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.shell > .content {
+  display: block;
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  overflow: auto;
+  padding: 36px 40px;
+  margin: 0;
+  height: auto;
+  max-width: none;
+}
+.skip {
+  position: fixed;
+  top: -100px;
+  left: 16px;
+  z-index: 3000;
+  padding: 10px;
+  background: var(--bg-primary);
+  &:focus {
+    top: 8px;
+  }
+}
+.backdrop {
+  display: none;
+}
+@media (max-width: 1000px) {
+  .shell > .content {
+    padding: 28px 24px;
+  }
+  .trigger {
+    gap: 12px;
+  }
+  .topbar {
+    gap: 12px;
+  }
+}
+@media (max-width: 720px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .topbar {
+    padding: 0 12px;
+    gap: 12px;
+  }
+  .brand {
+    width: auto;
+    white-space: nowrap;
+  }
+  .mobileToggle {
+    display: block;
+  }
+  .trigger {
+    min-width: 0;
+    gap: 6px;
+    span {
+      max-width: 100px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    kbd {
+      display: none;
+    }
+  }
+  .headerAction {
+    font-size: 12px;
+  }
+  .sidebar {
+    display: none;
+    position: fixed;
+    top: 56px;
+    bottom: 0;
+    left: 0;
+    width: 230px;
+    z-index: 101;
+  }
+  .open {
+    display: flex;
+  }
+  .shell > .content {
+    grid-column: 1;
+    padding: 24px 16px;
+  }
+  .backdrop {
+    display: block;
+    position: fixed;
+    inset: 56px 0 0;
+    background: rgb(0 0 0 / 55%);
+    border: 0;
+    z-index: 100;
+  }
+}

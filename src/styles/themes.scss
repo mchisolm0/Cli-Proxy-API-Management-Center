@@ -36,6 +36,10 @@
   --error-color: #c65746;
   --danger-color: var(--error-color);
   --info-color: var(--primary-color);
+  --failure-auth: #a52248;
+  --failure-quota: var(--quota-medium-color);
+  --failure-upstream: #6c4daa;
+  --failure-transport: #147285;
 
   --warning-bg: rgba(198, 87, 70, 0.12);
   --warning-border: rgba(198, 87, 70, 0.35);
@@ -238,6 +242,10 @@
   // 因此深色单独降一档。三套主题均已通过对比度/色盲/亮度校验。
   --viz-success: #0fae78;
   --viz-failure: #cf4b3a;
+  --failure-auth: #ef8fa0;
+  --failure-quota: #f0c060;
+  --failure-upstream: #b8a2f0;
+  --failure-transport: #6cc8dc;
 }
 
 @media (max-width: 768px),
