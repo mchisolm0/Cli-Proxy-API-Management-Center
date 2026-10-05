@@ -44,7 +44,9 @@ export function buildIndex(root: string, destination: string) {
         return {
           path,
           file,
-          signature: `${file}:${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}`,
+          // No dev/ino: CIFS mounts report unstable inode numbers for hard
+          // links, which made every run reparse unchanged snapshots.
+          signature: `${snap.host}/${file}:${st.size}:${st.mtimeNs}`,
         };
       });
       const signature = Bun.hash(

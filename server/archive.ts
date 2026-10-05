@@ -28,6 +28,7 @@ export function files(root: string): string[] {
   }
   return result.sort();
 }
+const SNAPSHOT_NAME = /^\d{4}-?\d{2}-?\d{2}T\d{6}Z$/;
 export function snapshots(root: string) {
   const result: {
     host: string;
@@ -40,7 +41,9 @@ export function snapshots(root: string) {
     for (const snap of readdirSync(join(root, host.name), {
       withFileTypes: true,
     })) {
-      if (!snap.isDirectory()) continue;
+      // Only publisher timestamps; network mounts can present the `latest`
+      // symlink as a plain directory.
+      if (!snap.isDirectory() || !SNAPSHOT_NAME.test(snap.name)) continue;
       const path = join(host.name, snap.name);
       const manifestPath = join(root, path, "manifest.json");
       try {

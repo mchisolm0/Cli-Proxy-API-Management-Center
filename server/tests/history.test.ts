@@ -7,13 +7,16 @@ import {
   mkdirSync,
   symlinkSync,
   copyFileSync,
+  cpSync,
+  statSync,
+  utimesSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { generate, first, second } from '../fixtures/generate';
 import { codex, claude, opencode, t3 } from '../parsers';
 import { buildIndex } from '../index';
-import { immutable, inside, lines } from '../archive';
+import { files, immutable, inside, lines } from '../archive';
 import { ftsQuery, search } from '../search';
 import { handler, rawRecord } from '../server';
 import type { SessionRow, ItemRow } from '../db';
@@ -362,5 +365,42 @@ describe('index and API', () => {
     expect(() => inside(root, '../index.sqlite')).toThrow('escapes root');
     symlinkSync(index, join(root, 'outside.sqlite'));
     expect(() => inside(root, 'outside.sqlite')).toThrow('escapes root');
+  });
+});
+
+describe('network archive mounts', () => {
+  test('a latest directory and recopied files with the same size and mtime are not reindexed', () => {
+    const dir = mkdtempSync('/tmp/fleet-dashboard-cifs-');
+    try {
+      const archive = join(dir, 'archive'),
+        destination = join(dir, 'index.sqlite');
+      generate(archive);
+      // Whole-second mtimes survive the copy below exactly.
+      const stamp = new Date('2026-10-01T12:00:00Z');
+      for (const path of files(archive)) utimesSync(path, stamp, stamp);
+      // A mount that hides symlinks shows `latest` as a real directory.
+      rmSync(join(archive, 'mac', 'latest'), { force: true });
+      cpSync(join(archive, 'mac', second), join(archive, 'mac', 'latest'), { recursive: true });
+      const firstRun = buildIndex(archive, destination);
+      expect(firstRun.snapshots + firstRun.skippedSnapshots).toBe(4);
+      // New inodes, same bytes and timestamps: what an unstable mount reports.
+      for (const path of files(join(archive, 'mac', second))) {
+        const copy = `${path}.copy`;
+        copyFileSync(path, copy);
+        rmSync(path);
+        cpSync(copy, path);
+        rmSync(copy);
+        utimesSync(path, stamp, stamp);
+        expect(statSync(path).mtimeMs).toBe(stamp.getTime());
+      }
+      expect(buildIndex(archive, destination)).toEqual({
+        snapshots: 0,
+        skippedSnapshots: 4,
+        parsedFiles: 0,
+        skippedFiles: firstRun.parsedFiles + firstRun.skippedFiles,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
