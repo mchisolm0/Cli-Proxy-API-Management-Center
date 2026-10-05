@@ -65,37 +65,160 @@ export function classify(event: Record<string, unknown>): ErrorClass {
   if (/invalid_request|context_length|model_not_found|client/.test(hint)) return 'client';
   return 'other';
 }
-/** Replace secrets in place: JSON formatting and large integer literals remain intact. */
+const REDACTED = '[redacted]';
+const REDACTION_BUDGET_MS = 25;
+const MAX_REDACTION_LENGTH = 1024 * 1024;
+
+// Generic key/token fields also describe keyboard input and code identifiers.
+function looksLikeSecret(value: string): boolean {
+  return (
+    value.length >= 12 &&
+    /^[a-z0-9_+./~%=-]+$/i.test(value) &&
+    (/[0-9_+./~%=]/.test(value) ||
+      (value.length >= 20 && /[a-z]/.test(value) && /[A-Z]/.test(value)))
+  );
+}
+
+/** Read one value forwards, including escaped JSON quotes, but never across a newline. */
+function assignmentValue(text: string, start: number) {
+  const delimiter =
+    text[start] === '\\' && /["']/.test(text[start + 1] || '')
+      ? text.slice(start, start + 2)
+      : /["']/.test(text[start] || '')
+        ? text[start]
+        : '';
+  const from = start + delimiter.length;
+  if (!delimiter) {
+    const token = /[^\s"'`,;&<>()[\]{}]+/y;
+    token.lastIndex = start;
+    const match = token.exec(text);
+    return {
+      from,
+      to: token.lastIndex || start,
+      end: token.lastIndex || start,
+      value: match?.[0] || '',
+    };
+  }
+  let i = from;
+  while (i < text.length && text[i] !== '\r' && text[i] !== '\n') {
+    if (text[i] === '\\') {
+      let end = i;
+      while (text[end] === '\\') end++;
+      if (text[end] === delimiter.at(-1)) {
+        // A JSON-encoded closing quote has 1 mod 4 backslashes; an escaped
+        // content quote has 3 mod 4. Plain quotes close after an even count.
+        if ((end - i) % (delimiter.length === 2 ? 4 : 2) === (delimiter.length === 2 ? 1 : 0)) {
+          const to = end - (delimiter.length - 1);
+          return { from, to, end: end + 1, value: text.slice(from, to) };
+        }
+        i = end + 1;
+      } else i = end;
+    } else if (delimiter.length === 1 && text[i] === delimiter) {
+      return { from, to: i, end: i + 1, value: text.slice(from, i) };
+    } else i++;
+  }
+  return { from, to: i, end: i, value: text.slice(from, i) };
+}
+
+/** Linear scans preserve formatting. Oversize/over-budget bodies fail closed as a whole. */
 export function redactText(value: string, secrets: string[] = []): string {
+  if (value.length > MAX_REDACTION_LENGTH) return REDACTED;
+  const deadline = performance.now() + REDACTION_BUDGET_MS;
+  const expired = () => performance.now() >= deadline;
   let text = value;
-  for (const secret of secrets) if (secret) text = text.replaceAll(secret, '[redacted]');
-  return text
-    .replace(
-      /(\bAuthorization(?:\\?["'])?[ \t]*:[ \t]*(?:\\?["'])?(?:Bearer|Basic)[ \t]+)[a-z0-9_+./~=-]{8,}/gi,
-      '$1[redacted]'
+  for (const secret of secrets) {
+    if (expired()) return REDACTED;
+    if (secret.length >= 12)
+      text = text
+        .split(REDACTED)
+        .map((part) => part.replaceAll(secret, REDACTED))
+        .join(REDACTED);
+  }
+  text = text.replace(
+    /(\bAuthorization(?:\\?["'])?[ \t]*:[ \t]*(?:\\?["'])?(?:Bearer|Basic)[ \t]+)[a-z0-9_+./~=-]+/gi,
+    '$1[redacted]'
+  );
+  if (expired()) return REDACTED;
+  text = text.replace(/\bBearer[ \t]+[a-z0-9_+./~=-]{20,}/gi, 'Bearer [redacted]');
+  text = text.replace(
+    /(\b(?:x-api-key|x-goog-api-key|x-management-key)(?:\\?["'])?[ \t]*:[ \t]*(?:\\?["'])?)[a-z0-9_+./~=-]+/gi,
+    '$1[redacted]'
+  );
+  if (expired()) return REDACTED;
+  const cookies = /\b(?:cookie|set-cookie)(?:\\?["'])?[ \t]*:[ \t]*/gi;
+  const cookieParts: string[] = [];
+  let cookieCopied = 0;
+  for (let header = cookies.exec(text); header; header = cookies.exec(text)) {
+    if (expired()) return REDACTED;
+    const start = cookies.lastIndex;
+    const value = assignmentValue(text, start);
+    if (value.from === start) {
+      const line = /[^\r\n]*/y;
+      line.lastIndex = start;
+      line.exec(text);
+      value.to = value.end = line.lastIndex;
+    }
+    cookieParts.push(text.slice(cookieCopied, value.from), REDACTED);
+    cookieCopied = value.to;
+    cookies.lastIndex = value.end;
+  }
+  text = cookieParts.join('') + text.slice(cookieCopied);
+  // URL delimiters are fixed; username/password runs cannot cross another URL's slashes.
+  text = text.replace(/(:\/\/[^\s/:@]+:)[^\s/@]+@/g, '$1[redacted]@');
+  // Run standalone tokens before assignment scanning so an ordinary quoted
+  // key/token value containing a pasted credential cannot hide it.
+  text = text.replace(
+    /(?<![\w/])(?:sk-ant-[a-z0-9_-]{20,}|sk-(?!ant-)[a-z0-9_-]{20,}|ghp_[a-z0-9]{36,}|github_pat_[a-z0-9_]{22,})/gi,
+    REDACTED
+  );
+  if (expired()) return REDACTED;
+  text = text.replace(/\bapi-keys:[ \t]*(?:\r?\n[ \t]+-[^\r\n]*)+/gi, (list) =>
+    list.replace(/^([ \t]*-[ \t]+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s#]+)/gm, '$1[redacted]')
+  );
+  text = text.replace(
+    /(\bapi-keys:[ \t]*\[)([^\r\n]*)/gi,
+    (_match, start: string, list: string) => {
+      const tokens = /"[^"\r\n]*"|'[^'\r\n]*'|\[redacted\]|[^\s,\]]+/g;
+      const parts: string[] = [start];
+      let copied = 0;
+      for (let token = tokens.exec(list); token; token = tokens.exec(list)) {
+        if (list.slice(copied, token.index).includes(']')) break;
+        parts.push(list.slice(copied, token.index));
+        parts.push(token[0] === REDACTED ? REDACTED : '"[redacted]"');
+        copied = tokens.lastIndex;
+      }
+      return parts.join('') + list.slice(copied);
+    }
+  );
+  if (expired()) return REDACTED;
+
+  // Consume each whole identifier once. Trying the suffix rule at every
+  // underscore can be quadratic even with a non-ambiguous prefix regex.
+  const identifiers = /\[redacted\]|[a-z0-9_-]+/gi;
+  const separator = /(?:\\?["'])?[ \t]*[:=][ \t]*/y;
+  const parts: string[] = [];
+  let copied = 0;
+  for (let match = identifiers.exec(text); match; match = identifiers.exec(text)) {
+    if (expired()) return REDACTED;
+    const name = match[0];
+    if (name === REDACTED) continue;
+    if (
+      !/(?:^|[_-])(?:key|token|secret|password|api[-_]?key|client[-_]?secret)$|^(?:apiKey|PGPASSWORD)$/i.test(
+        name
+      )
     )
-    .replace(/\bBearer[ \t]+[a-z0-9_+./~=-]{20,}/gi, 'Bearer [redacted]')
-    .replace(
-      /(\b(?:x-api-key|x-goog-api-key|x-management-key)(?:\\?["'])?[ \t]*:[ \t]*(?:\\?["'])?)[a-z0-9_+./~=-]{8,}/gi,
-      '$1[redacted]'
-    )
-    .replace(/\bsk-(?:ant-[a-z0-9_-]{20,}|(?!ant-)[a-z0-9_-]{20,})/gi, '[redacted]')
-    .replace(
-      /(\b(?:\w+[_-])*(?:key|token|secret|password|api[-_]?key|client[_-]?secret)(?:\\?["'])?[ \t]*[:=][ \t]*)(\\"|\\'|"|')(?:(?!\2)(?:\\\\\\.|\\.|[^\\]))*?\2/gi,
-      '$1$2[redacted]$2'
-    )
-    .replace(
-      /(\b(?:\w+[_-])*(?:key|token|secret|password|api[-_]?key|client[_-]?secret)(?:\\?["'])?[ \t]*[:=][ \t]*)[a-z0-9_+./~%-]{8,}={0,2}/gi,
-      '$1[redacted]'
-    )
-    .replace(/\bapi-keys:[ \t]*(?:\r?\n[ \t]+-[^\r\n]*)+/gi, (list) =>
-      list.replace(/^([ \t]*-[ \t]+)(?:"[^"]*"|'[^']*'|[^\s#]+)/gm, '$1[redacted]')
-    )
-    .replace(
-      /(\bapi-keys:[ \t]*\[)((?:"[^"]*"|'[^']*'|[^\]\r\n])*)(\])/gi,
-      (_match, start: string, list: string, end: string) =>
-        start + list.replace(/"[^"]*"|'[^']*'|[^\s,]+/g, '"[redacted]"') + end
-    );
+      continue;
+    separator.lastIndex = identifiers.lastIndex;
+    if (!separator.exec(text)) continue;
+    const value = assignmentValue(text, separator.lastIndex);
+    identifiers.lastIndex = value.end;
+    if (!value.value || value.value === REDACTED || text[value.end] === '(') continue;
+    if (/^(key|token)$/i.test(name) && !looksLikeSecret(value.value)) continue;
+    parts.push(text.slice(copied, value.from), REDACTED);
+    copied = value.to;
+  }
+  parts.push(text.slice(copied));
+  return expired() ? REDACTED : parts.join('');
 }
 
 export function sanitize(value: unknown, secrets: string[] = [], preserveKeys = false): unknown {
@@ -107,13 +230,20 @@ export function sanitize(value: unknown, secrets: string[] = [], preserveKeys = 
       // Native locations and pointers must still resolve, even when they resemble keys.
       if (
         preserveKeys &&
+        typeof v === 'string' &&
         /^(pointer|file|path|cwd|repo|branch|git_branch|gitBranch|git|directory|worktree_path|repository_url)$/i.test(
           key
         )
       )
         return [[key, v]];
       if (
-        /^(key|token|api[-_]?keys?|user_api_key|client[_-]?secret|authorization|x-api-key|x-goog-api-key|x-management-key|management_key|access_token|refresh_token|id_token|password|secret|cookie|set-cookie)$/i.test(
+        preserveKeys &&
+        /^(key|token)$/i.test(key) &&
+        (typeof v !== 'string' || !looksLikeSecret(v))
+      )
+        return [[key, sanitize(v, secrets, preserveKeys)]];
+      if (
+        /^(key|token|api[-_]?keys?|user_api_key|client[_-]?secret|authorization|x-api-key|x-goog-api-key|x-management-key|management_key|access_token|refresh_token|id_token|password|pgpassword|secret|cookie|set-cookie)$/i.test(
           key
         )
       )

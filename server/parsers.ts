@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { immutable, lines } from "./archive";
-import { redactText } from './telemetry/events';
+import { redactText, sanitize } from './telemetry/events';
 import {
   array,
   object,
@@ -156,7 +156,7 @@ export function claude(path: string, file: string, secrets: string[] = []): Pars
       s.started ||= time;
       s.updated = Math.max(s.updated, time);
     }
-    if (o.type === "ai-title") s.title = string(o.aiTitle);
+    if (o.type === "ai-title") s.title = redactText(string(o.aiTitle), secrets);
     if (o.type !== "user" && o.type !== "assistant") continue;
     s.model = string(m.model) || s.model;
     if (o.type === "assistant" && string(m.id) && m.usage !== undefined) {
@@ -232,7 +232,7 @@ export function opencode(path: string, file: string, secrets: string[] = []): Pa
         id = string(r.id);
       if (!id) throw new Error("Invalid OpenCode session id");
       const s = session("opencode", id);
-      s.title = string(r.title);
+      s.title = redactText(string(r.title), secrets);
       s.cwd = string(r.directory);
       s.repo = s.cwd;
       s.started = timestamp(r.time_created);
@@ -350,7 +350,7 @@ export function t3(path: string, file: string, secrets: string[] = []): Parsed {
         parsed.links.push({
           client,
           nativeId,
-          title: string(t.title),
+          title: redactText(string(t.title), secrets),
           branch: string(t.branch),
           threadId: id,
         });
@@ -358,7 +358,7 @@ export function t3(path: string, file: string, secrets: string[] = []): Parsed {
         model = t.model_selection_json
           ? json(string(t.model_selection_json))
           : {};
-      s.title = string(t.title);
+      s.title = redactText(string(t.title), secrets);
       s.cwd = string(t.worktree_path);
       s.repo = s.cwd;
       s.branch = string(t.branch);
@@ -390,7 +390,7 @@ export function t3(path: string, file: string, secrets: string[] = []): Parsed {
     db.close();
   }
 }
-export function codexMetadata(path: string): Record<string, unknown>[] {
+export function codexMetadata(path: string, secrets: string[] = []): Record<string, unknown>[] {
   const db = immutable(path);
   try {
     if (
@@ -401,7 +401,7 @@ export function codexMetadata(path: string): Record<string, unknown>[] {
         .get()
     )
       return [];
-    return db.query("SELECT * FROM threads").all().map(object);
+    return db.query("SELECT * FROM threads").all().map((row) => object(sanitize(row, secrets, true)));
   } finally {
     db.close();
   }

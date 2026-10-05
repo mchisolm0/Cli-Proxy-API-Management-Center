@@ -4,13 +4,14 @@ import { files, snapshots } from "./archive";
 import { openIndex, type SessionRow } from "./db";
 import { codex, claude, opencode, t3, codexMetadata } from "./parsers";
 import { string, type Parsed, type Session, type Link } from "./model";
-import { dashboardProblem, managementKey, fetchClientKeys } from './auth';
+import { dashboardProblem, managementKey } from './auth';
 
 export const archiveRoot = () =>
   resolve(process.env.ARCHIVE_ROOT || "./fixtures/archive");
 export const indexPath = () =>
   resolve(process.env.INDEX_PATH || "./data/index.sqlite");
 type Cache = { parsed: Parsed; metadata: Record<string, unknown>[] };
+const CACHE_PREFIX = 'r3:';
 
 export function buildIndex(
   root: string,
@@ -60,7 +61,7 @@ export function buildIndex(
           file,
           // No dev/ino: CIFS mounts report unstable inode numbers for hard
           // links, which made every run reparse unchanged snapshots.
-          signature: `r2:${snap.host}/${file}:${st.size}:${st.mtimeNs}`,
+          signature: `${CACHE_PREFIX}${snap.host}/${file}:${st.size}:${st.mtimeNs}`,
         };
       });
       const signature = Bun.hash(
@@ -108,7 +109,7 @@ export function buildIndex(
           result = {
             parsed,
             metadata: file.startsWith(".codex/state_")
-              ? codexMetadata(path)
+              ? codexMetadata(path, secrets)
               : [],
           };
           cacheRows.push([source.signature, JSON.stringify(result)]);
@@ -256,19 +257,26 @@ export function buildIndex(
       }).immediate();
       stats.snapshots++;
     }
+    // Run the migration cleanup only after the entire archive indexed successfully.
+    const cachePrefix = db
+      .query<{ value: string }, []>("SELECT value FROM setting WHERE key='cachePrefix'")
+      .get()?.value;
+    if (cachePrefix !== CACHE_PREFIX) {
+      db.transaction(() => {
+        db.query('DELETE FROM file_cache WHERE signature NOT LIKE ?').run(`${CACHE_PREFIX}%`);
+        db.query("INSERT OR REPLACE INTO setting VALUES('cachePrefix',?)").run(CACHE_PREFIX);
+      }).immediate();
+    }
     return stats;
   } finally {
     db.close();
   }
 }
 if (import.meta.main) {
-  let keys: string[] = [];
-  if (process.env.CPA_BASE_URL) {
-    try {
-      keys = await fetchClientKeys(process.env.CPA_BASE_URL, managementKey());
-    } catch {
-      // Indexing remains available when management access is unavailable.
-    }
-  }
-  console.log(buildIndex(archiveRoot(), indexPath(), managementKey, keys));
+  // The parent owns management polling and its ban backoff. Children never authenticate.
+  const input: unknown =
+    process.env.CPA_INDEX_KEYS_STDIN === '1' ? JSON.parse(await Bun.stdin.text()) : [];
+  if (!Array.isArray(input) || !input.every((key): key is string => typeof key === 'string'))
+    throw new Error('Invalid indexer redaction keys');
+  console.log(buildIndex(archiveRoot(), indexPath(), managementKey, input));
 }

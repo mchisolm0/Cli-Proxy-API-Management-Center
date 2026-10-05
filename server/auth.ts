@@ -18,6 +18,7 @@ export function managementKey(env = process.env): string {
 
 // Scoped to the connection's database lifetime; never persisted with auth states or events.
 const clientKeyCache = new WeakMap<Database, string[]>();
+const clientKeyRefreshFailures = new WeakSet<Database>();
 export function redactionSecrets(db: Database, key: string): string[] {
   return [key, ...(clientKeyCache.get(db) || [])];
 }
@@ -275,12 +276,19 @@ export async function pollAuth(
     const value: unknown = await response.json();
     try {
       const keys = await fetchClientKeys(base, key, fetcher, signal);
-      if (!signal?.aborted) clientKeyCache.set(db, keys);
+      if (!signal?.aborted) {
+        clientKeyCache.set(db, keys);
+        clientKeyRefreshFailures.delete(db);
+        managementAccepted(db, 'config_poll');
+      }
     } catch (error) {
       if (!signal?.aborted) {
         if (error instanceof Response && (error.status === 401 || error.status === 403))
           managementRejected(db, 'config_poll', `config_poll_http_${error.status}`);
-        else dashboardProblem(db, 'transport', 'redaction_keys_refresh_failed');
+        else if (!clientKeyRefreshFailures.has(db)) {
+          dashboardProblem(db, 'transport', 'redaction_keys_refresh_failed');
+          clientKeyRefreshFailures.add(db);
+        }
       }
     }
     const states = parseAuthFiles(sanitize(value, redactionSecrets(db, key)));

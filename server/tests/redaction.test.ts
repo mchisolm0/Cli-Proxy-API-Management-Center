@@ -1,11 +1,18 @@
 import { expect, test, spyOn } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, linkSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Database } from 'bun:sqlite';
 import { buildIndex } from '../index';
-import { codex, claude, opencode, t3 } from '../parsers';
+import { codex, claude, opencode, t3, codexMetadata } from '../parsers';
 import { openIndex, type ItemRow } from '../db';
-import { managementKey, fetchClientKeys, pollAuth, redactionSecrets } from '../auth';
+import {
+  managementKey,
+  fetchClientKeys,
+  pollAuth,
+  redactionSecrets,
+  managementRetryAt,
+} from '../auth';
 import { redactText, sanitize } from '../telemetry/events';
 import { handler, rawRecord, startDashboard, startIndexer } from '../server';
 
@@ -45,6 +52,161 @@ test('redaction handles commands, nested JSON, key headers and OAuth values with
   expect(sanitize(safe, [secrets[0]!], true)).toEqual(safe);
   expect(JSON.stringify(safe)).toContain('Keep the ordinary transcript text.');
   expect(sanitize({ api_key: 'fixture', source: 'normal' })).toEqual({ source: 'normal' });
+});
+
+test('Claude Read file objects are sanitized through the raw HTTP route', async () => {
+  const root = mkdtempSync('/tmp/pool-read-result-');
+  const db = openIndex(':memory:');
+  const clientKey = 'fixture-client-read-123456';
+  const record = {
+    toolUseResult: {
+      file: { filePath: '/code/.env', content: `plain ${clientKey}` },
+    },
+    file: '/code/sk-' + 'x'.repeat(24),
+    pointer: { file: '/code/.env' },
+  };
+  try {
+    const fetcher: typeof fetch = Object.assign(
+      async (input: string | URL | Request) =>
+        Response.json(
+          String(input).endsWith('/config')
+            ? { access: { 'api-keys': [clientKey] } }
+            : { files: [] }
+        ),
+      { preconnect: () => {} }
+    );
+    await pollAuth(db, 'http://synthetic.invalid', () => 'fixture-management', fetcher);
+    const text = JSON.stringify(record);
+    writeFileSync(join(root, 'read.jsonl'), text);
+    db.run(
+      "INSERT INTO session VALUES(1,'test','claude','read','','','','','','',0,0,0,'','root','','',0,1)"
+    );
+    db.query(
+      "INSERT INTO item(sessionId,seq,time,role,tool,callId,body,bodyLength,pointer) VALUES(1,0,0,'tool_result','','','',0,?)"
+    ).run(
+      JSON.stringify({
+        kind: 'jsonl',
+        file: 'read.jsonl',
+        offset: 0,
+        length: Buffer.byteLength(text),
+      })
+    );
+    const response = await handler(
+      db,
+      root,
+      undefined,
+      undefined,
+      () => ''
+    )(new Request('http://synthetic.invalid/api/items/1/raw'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      record: {
+        ...record,
+        toolUseResult: { file: { filePath: '/code/.env', content: 'plain [redacted]' } },
+      },
+    });
+  } finally {
+    db.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('short exact-match keys and existing markers do not damage ordinary transcript text', () => {
+  const text = 'a token is redacted: [redacted]';
+  expect(redactText(text, ['a', 'token', 'redacted', '[redacted]', 'placeholder'])).toBe(text);
+  expect(redactText('fixture-client-secret [redacted]', ['fixture-client-secret'])).toBe(
+    '[redacted] [redacted]'
+  );
+});
+
+test('generic key/token values preserve code and prose, and quoted values stop at newlines', () => {
+  for (const text of [
+    'const key = providerKeyFor(model)',
+    'const access_token = providerTokenFor(model)',
+    '"key":"Enter"',
+    'key: "a long ordinary sentence"',
+    "key: 'it is\na normal transcript, don't swallow it'",
+    'token: "long-ordinary-identifier"',
+  ]) {
+    expect(redactText(text)).toBe(text);
+  }
+  expect(sanitize({ key: 'Enter', token: 'providerKeyFor' }, [], true)).toEqual({
+    key: 'Enter',
+    token: 'providerKeyFor',
+  });
+  expect(redactText(`"key":"use sk-${'x'.repeat(24)}"`)).toBe('"key":"use [redacted]"');
+  expect(sanitize({ PGPASSWORD: 'short' }, [], true)).toEqual({ PGPASSWORD: '[redacted]' });
+  expect(redactText('Headers: {"Cookie":"a=b; c=d","count":123}')).toBe(
+    'Headers: {"Cookie":"[redacted]","count":123}'
+  );
+  expect(redactText(String.raw`{\"Cookie\":\"a=b; c=d\",\"count\":123}`)).toBe(
+    String.raw`{\"Cookie\":\"[redacted]\",\"count\":123}`
+  );
+  expect(redactText('[{"Cookie":"a=b"},{"Cookie":"c=d","Set-Cookie":"e=f"}]')).toBe(
+    '[{"Cookie":"[redacted]"},{"Cookie":"[redacted]","Set-Cookie":"[redacted]"}]'
+  );
+  const text = "password: 'short\nordinary text, don't swallow it'";
+  expect(redactText(text)).not.toContain('short');
+  expect(redactText(text)).toContain("\nordinary text, don't swallow it'");
+  for (const text of [
+    'OPENAI_API_KEY=fixture-1234567890',
+    'aws_secret_access_key = fixture-1234567890',
+    'client-secret: "short"',
+    'key=fixture-1234567890',
+    'token="fixture-1234567890"',
+    'PGPASSWORD=short',
+    'PGPASSWORD=s!mple#pass',
+    'X-Management-Key: short',
+    'Authorization: Bearer short',
+    'Cookie: session=short; other=fixture\nordinary line',
+    'ghp_' + 'x'.repeat(36),
+    'github_pat_' + 'x'.repeat(82),
+    'postgresql://user:short@localhost/db',
+    'redis://user:p%40ss@localhost:6379',
+  ]) {
+    const safe = redactText(text);
+    expect(safe).not.toBe(text);
+    expect(safe).toContain('[redacted]');
+    expect(redactText(safe)).toBe(safe);
+  }
+});
+
+test('redaction of adversarial blobs, identifiers and a 100 KB transcript stays under 50 ms', () => {
+  // Deterministic base64url, including many underscores and no assignment delimiter.
+  const blob = Buffer.from(Array.from({ length: 3840 }, (_, i) => (i * 71 + 255) % 256)).toString(
+    'base64url'
+  );
+  const identifier = Array.from({ length: 40 }, (_, i) => `part${i}`).join('_');
+  const transcript = ('ordinary code: const key = providerKeyFor(model); ' + blob + '\n')
+    .repeat(21)
+    .slice(0, 100 * 1024);
+  for (const text of [
+    blob,
+    identifier,
+    transcript,
+    '_'.repeat(5120),
+    'a-'.repeat(5120),
+    'api-keys: ['.repeat(5000),
+  ]) {
+    const started = performance.now();
+    const safe = redactText(text);
+    expect(performance.now() - started).toBeLessThan(50);
+    if (!text.startsWith('api-keys: [')) expect(safe).toBe(text);
+  }
+});
+
+test('redaction discards the entire body when its time or size budget is exceeded', () => {
+  const now = spyOn(performance, 'now');
+  let elapsed = 0;
+  now.mockImplementation(() => (elapsed += 30));
+  try {
+    expect(redactText('ordinary text fixture-client-secret', ['fixture-client-secret'])).toBe(
+      '[redacted]'
+    );
+  } finally {
+    now.mockRestore();
+  }
+  expect(redactText('x'.repeat(1024 * 1024 + 1))).toBe('[redacted]');
 });
 
 test('all native parsers redact bodies before truncation can leave a partial secret', () => {
@@ -107,6 +269,90 @@ test('all native parsers redact bodies before truncation can leave a partial sec
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('native titles, T3 links and Codex threads metadata are redacted before indexing or caching', () => {
+  const temp = mkdtempSync('/tmp/pool-secret-titles-');
+  const root = join(temp, 'archive');
+  const snapshot = join(root, 'host/2026-10-05T120000Z');
+  const clientKey = 'fixture-title-client-123456';
+  const title = `Help with ${clientKey} and sk-${'x'.repeat(24)}`;
+  const expected = 'Help with [redacted] and [redacted]';
+  const paths = {
+    claude: '.claude/projects/project/session.jsonl',
+    codex: '.codex/sessions/session.jsonl',
+    metadata: '.codex/state_5.sqlite',
+    open: '.local/share/opencode/opencode.db',
+    t3: '.t3/userdata/state.sqlite',
+  };
+  try {
+    for (const file of Object.values(paths))
+      mkdirSync(join(snapshot, file, '..'), { recursive: true });
+    writeFileSync(
+      join(snapshot, 'manifest.json'),
+      JSON.stringify({ completed_at: '2026-10-05T12:00:00Z', sources: [] })
+    );
+    writeFileSync(
+      join(snapshot, paths.claude),
+      JSON.stringify({ type: 'ai-title', sessionId: 'claude', aiTitle: title })
+    );
+    writeFileSync(
+      join(snapshot, paths.codex),
+      JSON.stringify({ type: 'session_meta', payload: { id: 'codex' } })
+    );
+    const metadata = new Database(join(snapshot, paths.metadata));
+    metadata.run('CREATE TABLE threads(id TEXT, title TEXT, name TEXT, first_user_message TEXT)');
+    metadata.query('INSERT INTO threads VALUES(?,?,?,?)').run('codex', title, title, clientKey);
+    metadata.close();
+    const open = new Database(join(snapshot, paths.open));
+    open.run(
+      'CREATE TABLE session(id TEXT, title TEXT); CREATE TABLE message(id TEXT, session_id TEXT, time_created INTEGER)'
+    );
+    open.query('INSERT INTO session VALUES(?,?)').run('open', title);
+    open.close();
+    const t = new Database(join(snapshot, paths.t3));
+    t.run(
+      'CREATE TABLE projection_threads(thread_id TEXT,title TEXT); CREATE TABLE provider_session_runtime(thread_id TEXT,provider_name TEXT,resume_cursor_json TEXT); CREATE TABLE projection_thread_messages(message_id TEXT,thread_id TEXT,created_at INTEGER)'
+    );
+    t.query('INSERT INTO projection_threads VALUES(?,?)').run('linked', title);
+    t.query('INSERT INTO projection_threads VALUES(?,?)').run('t3-only', title);
+    t.query('INSERT INTO provider_session_runtime VALUES(?,?,?)').run(
+      'linked',
+      'claudeAgent',
+      JSON.stringify({ resume: 'claude' })
+    );
+    t.close();
+    expect(claude(join(snapshot, paths.claude), paths.claude, [clientKey]).sessions[0]?.title).toBe(
+      expected
+    );
+    expect(opencode(join(snapshot, paths.open), paths.open, [clientKey]).sessions[0]?.title).toBe(
+      expected
+    );
+    const parsed = t3(join(snapshot, paths.t3), paths.t3, [clientKey]);
+    expect(parsed.links[0]?.title).toBe(expected);
+    expect(parsed.sessions.every((s) => s.title === expected)).toBe(true);
+    expect(
+      JSON.stringify(codexMetadata(join(snapshot, paths.metadata), [clientKey]))
+    ).not.toContain(clientKey);
+    const index = join(temp, 'index.sqlite');
+    buildIndex(root, index, () => '', [clientKey]);
+    const db = openIndex(index);
+    try {
+      expect(db.query('SELECT title FROM session ORDER BY client').all()).toEqual(
+        Array.from({ length: 4 }, () => ({ title: expected }))
+      );
+      expect(db.query('SELECT title FROM native_overlay').get()).toEqual({ title: expected });
+      for (const table of ['session', 'native_overlay', 'file_cache']) {
+        const stored = JSON.stringify(db.query(`SELECT * FROM ${table}`).all());
+        expect(stored).not.toContain(clientKey);
+        expect(stored).not.toContain('sk-' + 'x'.repeat(24));
+      }
+    } finally {
+      db.close();
+    }
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
   }
 });
 
@@ -258,8 +504,17 @@ test('an explicit archive root cannot be silently replaced by the stored root', 
   }
 });
 
-test('background indexing inherits the configured key loader environment', async () => {
+test('background indexing passes the current client keys through stdin, including during backoff', async () => {
   const db = openIndex(':memory:');
+  let client = 'fixture-client-before-backoff';
+  const fetcher: typeof fetch = Object.assign(
+    async (input: string | URL | Request) =>
+      Response.json(
+        String(input).endsWith('/config') ? { access: { 'api-keys': [client] } } : { files: [] }
+      ),
+    { preconnect: () => {} }
+  );
+  await pollAuth(db, 'http://synthetic.invalid', () => 'fixture-management', fetcher);
   const spawn = spyOn(Bun, 'spawn').mockReturnValue({
     exited: Promise.resolve(0),
     kill: () => {},
@@ -274,12 +529,113 @@ test('background indexing inherits the configured key loader environment', async
         CPA_MANAGEMENT_KEY_FILE: '/synthetic/key',
         ARCHIVE_ROOT: '/synthetic',
         INDEX_PATH: ':memory:',
+        CPA_INDEX_KEYS_STDIN: '1',
       },
     });
+    const firstLaunch: unknown = spawn.mock.calls[0]?.[0];
+    const stdin =
+      firstLaunch && typeof firstLaunch === 'object' && 'stdin' in firstLaunch
+        ? firstLaunch.stdin
+        : undefined;
+    expect(stdin).toBeInstanceOf(Blob);
+    expect(JSON.parse(await (stdin as Blob).text())).toEqual(['', client]);
+    client = 'fixture-rotated-before-backoff';
+    await pollAuth(db, 'http://synthetic.invalid', () => 'fixture-management', fetcher);
+    const rejected: typeof fetch = Object.assign(async () => new Response(null, { status: 401 }), {
+      preconnect: () => {},
+    });
+    await pollAuth(db, 'http://synthetic.invalid', () => 'stale-key', rejected);
+    expect(managementRetryAt(db)).toBeGreaterThan(Date.now());
+    await indexer.run();
+    const nextLaunch: unknown = spawn.mock.calls[1]?.[0];
+    const next =
+      nextLaunch && typeof nextLaunch === 'object' && 'stdin' in nextLaunch
+        ? nextLaunch.stdin
+        : undefined;
+    expect(JSON.parse(await (next as Blob).text())).toEqual(['', client]);
   } finally {
     indexer.stop();
     spawn.mockRestore();
     db.close();
+  }
+});
+
+test('real indexer children never request management config, even with a stale key during backoff', async () => {
+  const temp = mkdtempSync('/tmp/pool-child-no-auth-');
+  const root = join(temp, 'archive');
+  const snapshot = join(root, 'host/2026-10-05T120000Z');
+  const destination = join(temp, 'index.sqlite');
+  const db = openIndex(destination);
+  const client = 'fixture-child-client-123456';
+  const requestLog = join(temp, 'management-request');
+  const guard = join(temp, 'no-management-fetch.ts');
+  writeFileSync(
+    guard,
+    `import { writeFileSync } from 'node:fs';
+    globalThis.fetch = () => {
+      writeFileSync(${JSON.stringify(requestLog)}, 'unexpected management request');
+      throw new Error('Indexer must not authenticate');
+    };`
+  );
+  const env = {
+    CPA_BASE_URL: 'http://synthetic.invalid',
+    CPA_MANAGEMENT_KEY_FILE: join(temp, 'key'),
+    ARCHIVE_ROOT: root,
+    INDEX_PATH: destination,
+  };
+  const indexer = startIndexer(db, root, destination, undefined, env);
+  try {
+    mkdirSync(join(snapshot, '.codex/sessions'), { recursive: true });
+    writeFileSync(
+      join(snapshot, 'manifest.json'),
+      JSON.stringify({ completed_at: '2026-10-05T12:00:00Z', sources: [] })
+    );
+    writeFileSync(
+      join(snapshot, '.codex/sessions/session.jsonl'),
+      [
+        { type: 'session_meta', payload: { id: 'child' } },
+        { type: 'event_msg', payload: { type: 'user_message', message: `plain ${client}` } },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join('\n')
+    );
+    writeFileSync(env.CPA_MANAGEMENT_KEY_FILE, 'fixture-stale-management');
+    const fetcher: typeof fetch = Object.assign(
+      async (input: string | URL | Request) =>
+        Response.json(
+          String(input).endsWith('/config') ? { access: { 'api-keys': [client] } } : { files: [] }
+        ),
+      { preconnect: () => {} }
+    );
+    await pollAuth(db, 'http://synthetic.invalid', () => 'fixture-management', fetcher);
+    const rejected: typeof fetch = Object.assign(async () => new Response(null, { status: 401 }), {
+      preconnect: () => {},
+    });
+    await pollAuth(db, 'http://synthetic.invalid', () => 'stale-key', rejected);
+    expect(managementRetryAt(db)).toBeGreaterThan(Date.now());
+    await indexer.run();
+    expect(db.query('SELECT body FROM item').get()).toEqual({ body: 'plain [redacted]' });
+    expect(JSON.stringify(db.query('SELECT payload FROM file_cache').all())).not.toContain(client);
+    expect(db.query("SELECT * FROM dashboard_event WHERE code='index_failed'").all()).toEqual([]);
+    // Direct CLI indexing also never authenticates or waits for an interactive stdin.
+    const standalone = Bun.spawn({
+      cmd: [
+        process.execPath,
+        '--preload',
+        guard,
+        fileURLToPath(new URL('../index.ts', import.meta.url)),
+      ],
+      env,
+      stdin: 'ignore',
+      stdout: 'ignore',
+      stderr: 'pipe',
+    });
+    expect(await standalone.exited).toBe(0);
+    expect(await Bun.file(requestLog).exists()).toBe(false);
+  } finally {
+    indexer.stop();
+    db.close();
+    rmSync(temp, { recursive: true, force: true });
   }
 });
 
@@ -313,6 +669,10 @@ test('text rules cover realistic headers, env, YAML, mixed and escaped JSON with
   for (const prefix of ['sk-', 'sk-ant-']) {
     expect(redactText(prefix + 'x'.repeat(19))).toBe(prefix + 'x'.repeat(19));
     expect(redactText(prefix + 'x'.repeat(20))).toBe('[redacted]');
+    const token = prefix + 'x'.repeat(24);
+    expect(redactText(`/code/${token} identifier_${token} word${token}`)).toBe(
+      `/code/${token} identifier_${token} word${token}`
+    );
   }
   const formatted = '{\n  "count": 9007199254740993,\n  "api_key": "fixture-secret"\n}\n';
   expect(redactText(formatted)).toBe(formatted.replace('fixture-secret', '[redacted]'));
@@ -334,11 +694,11 @@ test('text rules cover realistic headers, env, YAML, mixed and escaped JSON with
     repo: location,
     branch: location,
     pointer: { file: location },
-    body: '/home/mcc/code/[redacted]',
+    body: location,
   });
 });
 
-test('legacy cache rows miss once and a new snapshot sharing a file writes no cache rows', () => {
+test('superseded cache rows are deleted once after success and shared files write no cache rows', () => {
   const temp = mkdtempSync('/tmp/pool-cache-writes-');
   const root = join(temp, 'archive'),
     index = join(temp, 'index.sqlite');
@@ -359,10 +719,16 @@ test('legacy cache rows miss once and a new snapshot sharing a file writes no ca
     expect(buildIndex(root, index).parsedFiles).toBe(1);
     db = openIndex(index);
     db.run(
-      "UPDATE file_cache SET signature=substr(signature,4); UPDATE snapshot SET signature='legacy'"
+      "UPDATE file_cache SET signature='r2:' || substr(signature,4); UPDATE snapshot SET signature='legacy'; DELETE FROM setting WHERE key='cachePrefix'"
     );
     expect(buildIndex(root, index).parsedFiles).toBe(1);
+    expect(db.query("SELECT * FROM file_cache WHERE signature NOT LIKE 'r3:%'").all()).toEqual([]);
+    // Cleanup is a once-per-version migration, not a repeated table scan.
+    db.run(
+      "CREATE TABLE cache_deletes(signature TEXT); CREATE TRIGGER cache_delete AFTER DELETE ON file_cache BEGIN INSERT INTO cache_deletes VALUES(old.signature); END; INSERT INTO file_cache VALUES('legacy-after-migration','{}')"
+    );
     expect(buildIndex(root, index).parsedFiles).toBe(0);
+    expect(db.query('SELECT * FROM cache_deletes').all()).toEqual([]);
     db.run(
       'CREATE TABLE cache_writes(signature TEXT); CREATE TRIGGER cache_insert AFTER INSERT ON file_cache BEGIN INSERT INTO cache_writes VALUES(new.signature); END; CREATE TRIGGER cache_update AFTER UPDATE ON file_cache BEGIN INSERT INTO cache_writes VALUES(new.signature); END'
     );
@@ -381,6 +747,36 @@ test('legacy cache rows miss once and a new snapshot sharing a file writes no ca
     expect(db.query('SELECT * FROM cache_writes').all()).toEqual([]);
   } finally {
     db?.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('a failed index run leaves superseded cache rows until a successful migration', () => {
+  const temp = mkdtempSync('/tmp/pool-cache-migration-');
+  const root = join(temp, 'archive');
+  const snapshot = join(root, 'host/2026-10-05T120000Z');
+  const index = join(temp, 'index.sqlite');
+  const db = openIndex(index);
+  try {
+    mkdirSync(join(snapshot, '.codex/sessions'), { recursive: true });
+    writeFileSync(
+      join(snapshot, 'manifest.json'),
+      JSON.stringify({ completed_at: '2026-10-05T12:00:00Z', sources: [] })
+    );
+    const file = join(snapshot, '.codex/sessions/session.jsonl');
+    writeFileSync(file, '{}');
+    db.query('INSERT INTO file_cache VALUES(?,?)').run('r2:old', '{}');
+    expect(() => buildIndex(root, index)).toThrow('Missing Codex session id');
+    expect(db.query('SELECT signature FROM file_cache').all()).toEqual([{ signature: 'r2:old' }]);
+    expect(db.query("SELECT * FROM setting WHERE key='cachePrefix'").get()).toBeNull();
+    writeFileSync(file, JSON.stringify({ type: 'session_meta', payload: { id: 'fixed' } }));
+    expect(buildIndex(root, index).parsedFiles).toBe(1);
+    expect(db.query("SELECT * FROM file_cache WHERE signature NOT LIKE 'r3:%'").all()).toEqual([]);
+    expect(db.query("SELECT value FROM setting WHERE key='cachePrefix'").get()).toEqual({
+      value: 'r3:',
+    });
+  } finally {
+    db.close();
     rmSync(temp, { recursive: true, force: true });
   }
 });
@@ -535,8 +931,15 @@ test('auth polls refresh client-key secrets in memory for raw responses and inde
       { preconnect: () => {} }
     );
     await pollAuth(db, 'http://synthetic.invalid', () => 'fixture-management', failed);
+    await pollAuth(db, 'http://synthetic.invalid', () => 'fixture-management', failed);
     expect(redactionSecrets(db, '')).toContain(client);
     expect(db.query('SELECT code FROM dashboard_event').all()).toEqual([
+      { code: 'redaction_keys_refresh_failed' },
+    ]);
+    await pollAuth(db, 'http://synthetic.invalid', () => 'fixture-management', fetcher);
+    await pollAuth(db, 'http://synthetic.invalid', () => 'fixture-management', failed);
+    expect(db.query('SELECT code FROM dashboard_event').all()).toEqual([
+      { code: 'redaction_keys_refresh_failed' },
       { code: 'redaction_keys_refresh_failed' },
     ]);
     for (const table of ['auth_state', 'auth_state_event', 'dashboard_event'])

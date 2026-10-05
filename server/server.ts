@@ -29,7 +29,8 @@ export function startIndexer(
   launch: () => { exited: Promise<number>; kill(): void } = () =>
     Bun.spawn({
       cmd: [process.execPath, fileURLToPath(new URL('./index.ts', import.meta.url))],
-      env: { ...env, ARCHIVE_ROOT: root, INDEX_PATH: destination },
+      env: { ...env, ARCHIVE_ROOT: root, INDEX_PATH: destination, CPA_INDEX_KEYS_STDIN: '1' },
+      stdin: new Blob([JSON.stringify(redactionSecrets(db, ''))]),
       stdout: 'inherit',
       stderr: 'inherit',
     }),
