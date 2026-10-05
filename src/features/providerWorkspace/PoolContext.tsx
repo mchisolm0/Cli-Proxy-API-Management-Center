@@ -23,7 +23,6 @@ import {
   notifyAuthFilesChanged,
 } from '@/features/authFiles/authFilesEvents';
 import { useProviderWorkbench } from '@/features/providers/useProviderWorkbench';
-import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { useTranslation } from 'react-i18next';
 import { deriveAttention } from '@/features/home/attention';
 import {
@@ -34,6 +33,7 @@ import {
 } from './model';
 import { parseCredentialQuota, type QuotaWindow } from './quotaSignals';
 import { getQuotaCacheKey } from '@/utils/quota/identity';
+import { createMutationQueue } from './actions';
 
 type Snapshot = {
   files: AuthFileItem[];
@@ -65,84 +65,90 @@ function usePoolData() {
   const abort = useRef<AbortController | null>(null);
   const alive = useRef(true);
   const connectionRevision = useRef(apiClient.getConnectionRevision());
-  const mutationPending = useRef(false);
+  const [enqueueMutation] = useState(createMutationQueue);
   const notification = useNotificationStore((state) => state.showNotification);
   const codexQuota = useQuotaStore((state) => state.codexQuota);
   const claudeQuota = useQuotaStore((state) => state.claudeQuota);
 
-  const refresh = useCallback(async () => {
-    if (!connected) return;
-    const id = ++request.current;
-    const revision = apiClient.getConnectionRevision();
-    abort.current?.abort();
-    const controller = new AbortController();
-    abort.current = controller;
-    setData((previous) => ({ ...previous, loading: true }));
-    const results = await Promise.allSettled([
-      authFilesApi.list(),
-      historyApi.health('24h', controller.signal),
-      historyApi.problems('24h', controller.signal),
-      historyApi.search({}, controller.signal),
-      fetchConfig(),
-    ]);
-    if (!alive.current || id !== request.current || revision !== apiClient.getConnectionRevision())
-      return;
-    const [files, health, problems, recent] = results;
-    const labels = ['credentials', 'health', 'problems', 'sessions', 'settings'];
-    setData({
-      files: files.status === 'fulfilled' ? files.value.files : [],
-      health: health.status === 'fulfilled' ? health.value : null,
-      problems: problems.status === 'fulfilled' ? problems.value : null,
-      recent: recent.status === 'fulfilled' ? recent.value : null,
-      errors: results.flatMap((result, index) =>
-        result.status === 'rejected' ? [labels[index]] : []
-      ),
-      loading: false,
-    });
-  }, [connected, fetchConfig]);
+  const refresh = useCallback(
+    async (forceConfig = false) => {
+      if (!connected) return;
+      const id = ++request.current;
+      const revision = apiClient.getConnectionRevision();
+      abort.current?.abort();
+      const controller = new AbortController();
+      abort.current = controller;
+      setData((previous) => ({ ...previous, loading: true }));
+      const results = await Promise.allSettled([
+        authFilesApi.list(),
+        historyApi.health('24h', controller.signal),
+        historyApi.problems('24h', controller.signal),
+        historyApi.search({}, controller.signal),
+        fetchConfig(forceConfig),
+      ]);
+      if (
+        !alive.current ||
+        id !== request.current ||
+        revision !== apiClient.getConnectionRevision()
+      )
+        return;
+      const [files, health, problems, recent] = results;
+      const labels = ['credentials', 'health', 'problems', 'sessions', 'settings'];
+      setData({
+        files: files.status === 'fulfilled' ? files.value.files : [],
+        health: health.status === 'fulfilled' ? health.value : null,
+        problems: problems.status === 'fulfilled' ? problems.value : null,
+        recent: recent.status === 'fulfilled' ? recent.value : null,
+        errors: results.flatMap((result, index) =>
+          result.status === 'rejected' ? [labels[index]] : []
+        ),
+        loading: false,
+      });
+    },
+    [connected, fetchConfig]
+  );
 
   useEffect(() => {
     alive.current = true;
     void refresh();
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
-    window.addEventListener(AUTH_FILES_CHANGED_EVENT, refresh);
+    const onFilesChanged = () => void refresh();
+    window.addEventListener(AUTH_FILES_CHANGED_EVENT, onFilesChanged);
     return () => {
       alive.current = false;
       abort.current?.abort();
       window.clearInterval(timer);
-      window.removeEventListener(AUTH_FILES_CHANGED_EVENT, refresh);
+      window.removeEventListener(AUTH_FILES_CHANGED_EVENT, onFilesChanged);
     };
   }, [refresh]);
-  useHeaderRefresh(refresh);
 
-  const run = async (action: () => Promise<unknown>) => {
-    if (
-      mutationPending.current ||
-      !connected ||
-      !alive.current ||
-      connectionRevision.current !== apiClient.getConnectionRevision()
-    )
-      return;
-    const revision = apiClient.getConnectionRevision();
-    setBusy(true);
-    mutationPending.current = true;
-    try {
-      await action();
-      if (!alive.current || revision !== apiClient.getConnectionRevision()) return;
-      notification(t('shell.saved'), 'success');
-    } catch (error) {
-      if (alive.current && revision === apiClient.getConnectionRevision()) {
-        notification(error instanceof Error ? error.message : t('shell.save_failed'), 'error');
+  const run = (action: () => Promise<unknown>) =>
+    enqueueMutation(async () => {
+      if (
+        !connected ||
+        !alive.current ||
+        connectionRevision.current !== apiClient.getConnectionRevision()
+      )
+        return;
+      const revision = apiClient.getConnectionRevision();
+      setBusy(true);
+      try {
+        await action();
+        if (!alive.current || revision !== apiClient.getConnectionRevision()) return;
+        notification(t('shell.saved'), 'success');
+      } catch (error) {
+        if (alive.current && revision === apiClient.getConnectionRevision()) {
+          notification(error instanceof Error ? error.message : t('shell.save_failed'), 'error');
+        }
+      } finally {
+        if (alive.current && revision === apiClient.getConnectionRevision()) {
+          setBusy(false);
+          await refresh();
+        }
       }
-    } finally {
-      mutationPending.current = false;
-      if (alive.current && revision === apiClient.getConnectionRevision()) {
-        setBusy(false);
-        await refresh();
-      }
-    }
-  };
+    });
   const setCredential = async (file: AuthFileItem, disabled: boolean) => {
+    if (file.runtimeOnly) throw new Error(t('shell.runtime_credential_config'));
     if (connectionRevision.current !== apiClient.getConnectionRevision() || !alive.current)
       throw new DOMException('Connection changed', 'AbortError');
     await authFilesApi.setStatus(file.name, disabled, String(file.authIndex ?? '') || undefined);

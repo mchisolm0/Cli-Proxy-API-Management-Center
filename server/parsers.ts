@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { immutable, lines } from "./archive";
+import { sanitize } from './telemetry/events';
 import {
   array,
   object,
@@ -30,13 +31,13 @@ function finish(s: Session) {
   );
   return s;
 }
-export function codex(path: string, file: string): Parsed {
+export function codex(path: string, file: string, secrets: string[] = []): Parsed {
   const s = session("codex", "");
   let startOrdinal = 0;
   const canonical = new Set<string>();
   const completed: { key: string; item: Item }[] = [];
   for (const line of lines(path)) {
-    const o = line.value,
+    const o = object(sanitize(line.value, secrets, true)),
       p = object(o.payload),
       time = timestamp(o.timestamp);
     const pointer: Pointer = {
@@ -132,13 +133,13 @@ export function codex(path: string, file: string): Parsed {
     }
   return { sessions: [finish(s)], links: [] };
 }
-export function claude(path: string, file: string): Parsed {
+export function claude(path: string, file: string, secrets: string[] = []): Parsed {
   const s = session("claude", "");
   const usage = new Map<string, number>();
   const blocks = new Set<string>();
   let agentId = "";
   for (const line of lines(path)) {
-    const o = line.value,
+    const o = object(sanitize(line.value, secrets, true)),
       m = object(o.message),
       time = timestamp(o.timestamp);
     const pointer: Pointer = {
@@ -222,7 +223,7 @@ export function claude(path: string, file: string): Parsed {
   s.provider = "anthropic";
   return { sessions: [finish(s)], links: [] };
 }
-export function opencode(path: string, file: string): Parsed {
+export function opencode(path: string, file: string, secrets: string[] = []): Parsed {
   const db = immutable(path);
   try {
     const sessions: Session[] = [];
@@ -259,7 +260,7 @@ export function opencode(path: string, file: string): Parsed {
           )
           .all(string(m.id))) {
           const p = object(part),
-            d = json(string(p.data)),
+            d = json(string(sanitize(p.data, secrets, true))),
             state = object(d.state);
           const pointer: Pointer = {
             kind: "sqlite",
@@ -310,7 +311,7 @@ export function opencode(path: string, file: string): Parsed {
     db.close();
   }
 }
-export function t3(path: string, file: string): Parsed {
+export function t3(path: string, file: string, secrets: string[] = []): Parsed {
   const db = immutable(path);
   const parsed: Parsed = { sessions: [], links: [] };
   try {
@@ -371,7 +372,7 @@ export function t3(path: string, file: string): Parsed {
           "SELECT * FROM projection_thread_messages WHERE thread_id=? ORDER BY created_at,message_id",
         )
         .all(id)) {
-        const m = object(row);
+        const m = object(sanitize(row, secrets, true));
         s.items.push(
           item(timestamp(m.created_at), role(m.role), string(m.text), {
             kind: "sqlite",

@@ -2227,6 +2227,15 @@
     "auth_error": "Authorization was refused."
   },
   "shell": {
+    "pool_change_confirm": "Apply {{action}} to all credentials in {{name}}?",
+    "change_confirm": "Apply {{action}} to {{name}}?",
+    "config_write_warning": "This saves config.yaml in v8 format. Earlier versions cannot read it.",
+    "save_config": "Save config (v8)",
+    "runtime_credential_config": "Manage this API key from its provider settings.",
+    "relogin_confirm": "Sign in as {{name}} to repair this account. Signing in with a different account adds a new credential.",
+    "oauth_account_hint": "Sign in with the same account to repair its credential. A different account adds a new credential.",
+    "signin_provider": "Sign in to {{provider}}",
+
     "home": "Home",
     "quota": "Quota",
     "exhausted": "Limited",

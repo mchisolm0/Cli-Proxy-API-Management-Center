@@ -9,7 +9,7 @@ export type Attention = {
   id: string;
   provider: string;
   category: FailureClass;
-  reason: 'auth' | 'disabled' | 'quota' | 'cooldown' | 'unavailable' | 'problem' | 'traffic';
+  reason: 'auth' | 'quota' | 'cooldown' | 'unavailable' | 'problem' | 'traffic';
   file?: AuthFileItem;
   problem?: Problem;
   count?: number;
@@ -24,6 +24,7 @@ export function deriveAttention(
 ): Attention[] {
   const attention: Attention[] = [];
   for (const file of files) {
+    if (file.disabled) continue;
     const provider = workspaceChannel(file.provider || file.type || 'unknown');
     const base = { id: `credential:${credentialId(file)}`, provider, file };
     const cooldown = file.cooldownSnapshot && summarizeCooldowns(file.cooldownSnapshot, now);
@@ -34,19 +35,17 @@ export function deriveAttention(
       (window) =>
         quotaIsCurrent(window, now) && (window.rejected || (window.usedPercent ?? 0) >= 100)
     );
-    const reason = file.disabled
-      ? 'disabled'
-      : quota
-        ? 'quota'
-        : cooldown?.earliestSeconds
-          ? 'cooldown'
-          : file.status === 'error'
-            ? /401|unauthor|expired|invalid_grant|oauth|token/i.test(file.statusMessage || '')
-              ? 'auth'
-              : 'unavailable'
-            : file.unavailable
-              ? 'unavailable'
-              : null;
+    const reason = quota
+      ? 'quota'
+      : cooldown?.earliestSeconds
+        ? 'cooldown'
+        : file.status === 'error'
+          ? /401|unauthor|expired|invalid_grant|oauth|token/i.test(file.statusMessage || '')
+            ? 'auth'
+            : 'unavailable'
+          : file.unavailable
+            ? 'unavailable'
+            : null;
     if (reason) {
       const cooldownReason = cooldown?.rows.find((row) => row.remainingSeconds > 0)?.record.reason;
       const category: FailureClass =

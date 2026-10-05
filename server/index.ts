@@ -4,6 +4,8 @@ import { files, snapshots } from "./archive";
 import { openIndex, type SessionRow } from "./db";
 import { codex, claude, opencode, t3, codexMetadata } from "./parsers";
 import { string, type Parsed, type Session, type Link } from "./model";
+import { managementKey } from './auth';
+import { sanitize } from './telemetry/events';
 
 export const archiveRoot = () =>
   resolve(process.env.ARCHIVE_ROOT || "./fixtures/archive");
@@ -11,7 +13,8 @@ export const indexPath = () =>
   resolve(process.env.INDEX_PATH || "./data/index.sqlite");
 type Cache = { parsed: Parsed; metadata: Record<string, unknown>[] };
 
-export function buildIndex(root: string, destination: string) {
+export function buildIndex(root: string, destination: string, loadKey = managementKey) {
+  const key = loadKey();
   root = realpathSync(root);
   const db = openIndex(destination);
   const stats = {
@@ -83,13 +86,13 @@ export function buildIndex(root: string, destination: string) {
         } else {
           const { path, file } = source;
           const parsed = file.startsWith(".claude/")
-            ? claude(path, file)
+            ? claude(path, file, [key])
             : file.endsWith("opencode.db")
-              ? opencode(path, file)
+              ? opencode(path, file, [key])
               : file.endsWith("state.sqlite")
-                ? t3(path, file)
+                ? t3(path, file, [key])
                 : file.endsWith(".jsonl")
-                  ? codex(path, file)
+                  ? codex(path, file, [key])
                   : { sessions: [], links: [] };
           result = {
             parsed,
@@ -97,9 +100,11 @@ export function buildIndex(root: string, destination: string) {
               ? codexMetadata(path)
               : [],
           };
-          cacheRows.push([source.signature, JSON.stringify(result)]);
           stats.parsedFiles++;
         }
+        // Parsed/cache shapes are retained; only secret values and text are replaced.
+        result = sanitize(result, [key], true) as Cache;
+        cacheRows.push([source.signature, JSON.stringify(result)]);
         sessions.push(...result.parsed.sessions);
         links.push(...result.parsed.links);
         metadata.push(...result.metadata);
@@ -116,7 +121,7 @@ export function buildIndex(root: string, destination: string) {
       }
       db.transaction(() => {
         for (const row of cacheRows)
-          db.query("INSERT INTO file_cache VALUES(?,?)").run(...row);
+          db.query("INSERT OR REPLACE INTO file_cache VALUES(?,?)").run(...row);
         const known = new Set(
           db
             .query<{ client: string; nativeId: string }, [string]>(

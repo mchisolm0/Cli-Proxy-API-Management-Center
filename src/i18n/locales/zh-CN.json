@@ -2223,5 +2223,15 @@
     "unavailable": "重置暂不可用。",
     "rate_limited": "请求过于频繁。",
     "auth_error": "授权被拒绝。"
+  },
+  "shell": {
+    "pool_change_confirm": "确定对 {{name}} 的所有凭据执行{{action}}？",
+    "change_confirm": "确定对 {{name}} 执行{{action}}？",
+    "config_write_warning": "这将以 v8 格式保存 config.yaml。旧版本无法读取。",
+    "save_config": "保存配置（v8）",
+    "runtime_credential_config": "请在提供商设置中管理此 API 密钥。",
+    "relogin_confirm": "请以 {{name}} 登录以修复此账户。使用其他账户登录会新增凭据。",
+    "oauth_account_hint": "请使用同一账户登录以修复凭据。其他账户会新增凭据。",
+    "signin_provider": "登录 {{provider}}"
   }
 }

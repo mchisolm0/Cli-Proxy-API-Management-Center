@@ -21,7 +21,7 @@ export function HomePage() {
         <button
           type="button"
           className={styles.action}
-          onClick={() => void pool.refresh()}
+          onClick={() => void pool.refresh(true)}
           disabled={pool.loading}
         >
           {t('shell.refresh')}

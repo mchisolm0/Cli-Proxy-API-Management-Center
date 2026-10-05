@@ -18,6 +18,7 @@ import {
   type ScalarSetting,
 } from './ranking';
 import styles from '@/features/providerWorkspace/Workspace.module.scss';
+import { confirmPoolChange } from '@/features/providerWorkspace/actions';
 
 type Command = {
   id: string;
@@ -103,13 +104,7 @@ function SettingEditor({
       ) : (
         <input
           id="palette-setting"
-          type={
-            typeof setting.fallback === 'number'
-              ? 'number'
-              : command.id === 'setting:rmSecretKey'
-                ? 'password'
-                : 'text'
-          }
+          type={typeof setting.fallback === 'number' ? 'number' : 'text'}
           min={setting.min}
           max={setting.max}
           step={1}
@@ -122,9 +117,10 @@ function SettingEditor({
           }}
         />
       )}
+      <p>{t('shell.config_write_warning')}</p>
       <div className={styles.actions}>
         <Button type="submit" disabled={!ready || saving}>
-          {t('shell.save')}
+          {t('shell.save_config')}
         </Button>
         <Button variant="ghost" disabled={saving} onClick={onBack}>
           {t('shell.back')}
@@ -248,7 +244,10 @@ export function CommandPalette({
           label: `${t(file.disabled ? 'shell.enable' : 'shell.disable')} ${credentialLabel(file)}`,
           group: t('shell.actions'),
           run: () => {
-            void pool.run(() => pool.setCredential(file, !file.disabled));
+            onClose();
+            confirmPoolChange(file.disabled ? 'enable' : 'disable', credentialLabel(file), () =>
+              pool.run(() => pool.setCredential(file, !file.disabled))
+            );
           },
         }))
       );
@@ -258,7 +257,13 @@ export function CommandPalette({
           label: `${t(resource.disabled ? 'shell.enable' : 'shell.disable')} ${provider.name} ${resource.identifier}`,
           group: t('shell.actions'),
           run: () => {
-            void pool.run(() => pool.workbench.toggleDisabled(resource, !resource.disabled));
+            onClose();
+            confirmPoolChange(
+              resource.disabled ? 'enable' : 'disable',
+              `${provider.name} ${resource.identifier}`,
+              () => pool.run(() => pool.workbench.toggleDisabled(resource, !resource.disabled)),
+              true
+            );
           },
         }))
       );

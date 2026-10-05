@@ -53,14 +53,18 @@ export const INLINE_SETTINGS: Record<string, ScalarSetting> = {
   },
 };
 
-/** Configured scalars use the backend's type; structured fields keep their existing editor. */
+/** Only allowlisted settings can be edited inline. All others open the config editor. */
 export function scalarSettingsFromConfig(
   raw: unknown,
   fields: readonly { fieldId: string; yamlKeys?: string[] }[]
 ): Record<string, ScalarSetting> {
   const settings = { ...INLINE_SETTINGS };
   for (const field of fields) {
-    if (!field.yamlKeys?.length) continue;
+    if (
+      !Object.prototype.hasOwnProperty.call(INLINE_SETTINGS, field.fieldId) ||
+      !field.yamlKeys?.length
+    )
+      continue;
     const value = field.yamlKeys.reduce<unknown>(
       (parent, key) =>
         parent !== null && typeof parent === 'object' && !Array.isArray(parent)

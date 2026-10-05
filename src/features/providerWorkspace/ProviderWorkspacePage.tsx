@@ -31,6 +31,7 @@ import {
 import { quotaIsCurrent, type QuotaWindow } from './quotaSignals';
 import { ProblemRows } from './ProblemRows';
 import { OAuthDialog } from './OAuthDialog';
+import { confirmAccountLogin, confirmPoolChange } from './actions';
 import styles from './Workspace.module.scss';
 
 function QuotaMeters({ windows, now }: { windows: QuotaWindow[]; now: number }) {
@@ -213,10 +214,15 @@ function Workspace({ id }: { id: string }) {
     else if (provider.brand)
       setSheet({ open: true, brand: provider.brand, mode: 'create', resource: null });
   };
-  const confirmDelete = (label: string, action: () => Promise<unknown>) =>
+  const confirmDelete = (label: string, action: () => Promise<unknown>, configWrite = false) =>
     showConfirmation({
       title: t('shell.delete'),
-      message: t('shell.delete_confirm', { name: label }),
+      message: [
+        t('shell.delete_confirm', { name: label }),
+        configWrite ? t('shell.config_write_warning') : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
       variant: 'danger',
       confirmText: t('shell.delete'),
       onConfirm: () => pool.run(action),
@@ -291,20 +297,26 @@ function Workspace({ id }: { id: string }) {
               pool.busy || !pool.connected || (!provider.files.length && !provider.resources.length)
             }
             onClick={() =>
-              void pool.run(async () => {
-                const revision = apiClient.getConnectionRevision();
-                for (const file of provider.files) await pool.setCredential(file, !paused);
-                for (const resource of provider.resources) {
-                  if (revision !== apiClient.getConnectionRevision())
-                    throw new DOMException('Connection changed', 'AbortError');
-                  // Each write refreshes the v8 group snapshot used for conflict checks.
-                  const latest = workspaceProviders(useConfigStore.getState().config, [])
-                    .flatMap((entry) => entry.resources)
-                    .find((entry) => entry.id === resource.id);
-                  if (!latest) throw new Error(t('shell.provider_missing'));
-                  await pool.workbench.toggleDisabled(latest, !paused);
-                }
-              })
+              confirmPoolChange(
+                paused ? 'resume' : 'pause',
+                provider.name,
+                () =>
+                  pool.run(async () => {
+                    const revision = apiClient.getConnectionRevision();
+                    for (const file of provider.files) await pool.setCredential(file, !paused);
+                    for (const resource of provider.resources) {
+                      if (revision !== apiClient.getConnectionRevision())
+                        throw new DOMException('Connection changed', 'AbortError');
+                      // Each write refreshes the v8 group snapshot used for conflict checks.
+                      const latest = workspaceProviders(useConfigStore.getState().config, [])
+                        .flatMap((entry) => entry.resources)
+                        .find((entry) => entry.id === resource.id);
+                      if (!latest) throw new Error(t('shell.provider_missing'));
+                      await pool.workbench.toggleDisabled(latest, !paused);
+                    }
+                  }),
+                !provider.oauth
+              )
             }
           >
             {t(paused ? 'shell.resume' : 'shell.pause')}
@@ -385,7 +397,9 @@ function Workspace({ id }: { id: string }) {
                     <Button
                       size="sm"
                       variant="secondary"
-                      onClick={() => setLogin(provider.channel)}
+                      onClick={() =>
+                        confirmAccountLogin(credentialLabel(file), () => setLogin(provider.channel))
+                      }
                     >
                       {t('shell.relogin')}
                     </Button>
@@ -394,7 +408,13 @@ function Workspace({ id }: { id: string }) {
                     size="sm"
                     variant="secondary"
                     disabled={pool.busy}
-                    onClick={() => void pool.run(() => pool.setCredential(file, !file.disabled))}
+                    onClick={() =>
+                      confirmPoolChange(
+                        file.disabled ? 'enable' : 'disable',
+                        credentialLabel(file),
+                        () => pool.run(() => pool.setCredential(file, !file.disabled))
+                      )
+                    }
                   >
                     {t(file.disabled ? 'shell.enable' : 'shell.disable')}
                   </Button>
@@ -466,8 +486,14 @@ function Workspace({ id }: { id: string }) {
                     variant="secondary"
                     disabled={pool.busy}
                     onClick={() =>
-                      void pool.run(() =>
-                        pool.workbench.toggleDisabled(resource, !resource.disabled)
+                      confirmPoolChange(
+                        resource.disabled ? 'enable' : 'disable',
+                        resource.name || provider.name,
+                        () =>
+                          pool.run(() =>
+                            pool.workbench.toggleDisabled(resource, !resource.disabled)
+                          ),
+                        true
                       )
                     }
                   >
@@ -487,8 +513,10 @@ function Workspace({ id }: { id: string }) {
                     variant="ghost"
                     disabled={pool.busy}
                     onClick={() =>
-                      confirmDelete(resource.name || provider.name, () =>
-                        pool.workbench.deleteProvider(resource)
+                      confirmDelete(
+                        resource.name || provider.name,
+                        () => pool.workbench.deleteProvider(resource),
+                        true
                       )
                     }
                   >
@@ -515,20 +543,24 @@ function Workspace({ id }: { id: string }) {
                         variant="ghost"
                         disabled={pool.busy}
                         onClick={() =>
-                          confirmDelete(maskApiKey(key.apiKey), async () => {
-                            const raw = resource.raw as OpenAIProviderConfig;
-                            await providersApi.updateOpenAIProvider(
-                              raw.name,
-                              resource.originalIndex,
-                              {
-                                ...raw,
-                                apiKeyEntries: raw.apiKeyEntries?.filter(
-                                  (_, entryIndex) => entryIndex !== index
-                                ),
-                              }
-                            );
-                            await pool.workbench.refetch();
-                          })
+                          confirmDelete(
+                            maskApiKey(key.apiKey),
+                            async () => {
+                              const raw = resource.raw as OpenAIProviderConfig;
+                              await providersApi.updateOpenAIProvider(
+                                raw.name,
+                                resource.originalIndex,
+                                {
+                                  ...raw,
+                                  apiKeyEntries: raw.apiKeyEntries?.filter(
+                                    (_, entryIndex) => entryIndex !== index
+                                  ),
+                                }
+                              );
+                              await pool.workbench.refetch();
+                            },
+                            true
+                          )
                         }
                       >
                         {t('shell.remove')}

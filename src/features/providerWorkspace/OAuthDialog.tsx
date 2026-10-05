@@ -82,8 +82,9 @@ export function OAuthDialog({ provider, onClose }: { provider: string; onClose: 
   }, [provider, t]);
 
   return (
-    <Modal open title={t('shell.relogin_provider', { provider })} onClose={onClose}>
+    <Modal open title={t('shell.signin_provider', { provider })} onClose={onClose}>
       <div className={styles.oauth}>
+        <p>{t('shell.oauth_account_hint')}</p>
         <p role="status">{t(`shell.oauth_${status}`)}</p>
         {error && (
           <p role="alert" className={styles.error}>

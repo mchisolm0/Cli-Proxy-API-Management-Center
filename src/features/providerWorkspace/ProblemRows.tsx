@@ -5,6 +5,7 @@ import type { Attention } from '@/features/home/attention';
 import { usePool } from './PoolContext';
 import { credentialLabel, providerPath } from './model';
 import styles from './Workspace.module.scss';
+import { confirmAccountLogin, confirmPoolChange } from './actions';
 
 export function ProblemRows({
   items,
@@ -39,7 +40,7 @@ export function ProblemRows({
         return (
           <div key={item.id} className={styles.problem} data-category={item.category}>
             <div>
-              <strong>{item.file ? credentialLabel(item.file) : name}</strong>
+              <strong>{item.file ? credentialLabel(item.file, provider) : name}</strong>
               <p>
                 {t(`shell.attention_${item.reason}`, {
                   provider: name,
@@ -51,16 +52,15 @@ export function ProblemRows({
               <span className={styles.failureClass}>{t(`shell.class_${item.category}`)}</span>
             </div>
             <div className={styles.actions}>
-              {item.reason === 'disabled' && item.file ? (
+              {item.category === 'auth' && login && !item.file?.runtimeOnly ? (
                 <Button
                   size="sm"
-                  disabled={pool.busy}
-                  onClick={() => void pool.run(() => pool.setCredential(item.file!, false))}
+                  onClick={() =>
+                    confirmAccountLogin(item.file ? credentialLabel(item.file) : name, () =>
+                      onLogin(provider.channel)
+                    )
+                  }
                 >
-                  {t('shell.enable')}
-                </Button>
-              ) : item.category === 'auth' && login ? (
-                <Button size="sm" onClick={() => onLogin(provider.channel)}>
                   {t('shell.relogin')}
                 </Button>
               ) : (
@@ -68,12 +68,16 @@ export function ProblemRows({
                   {t(alias ? 'shell.add_alias' : 'shell.open_provider')}
                 </Link>
               )}
-              {item.file && !item.file.disabled && (
+              {item.file && !item.file.disabled && !item.file.runtimeOnly && (
                 <Button
                   variant="ghost"
                   size="sm"
                   disabled={pool.busy}
-                  onClick={() => void pool.run(() => pool.setCredential(item.file!, true))}
+                  onClick={() =>
+                    confirmPoolChange('disable', credentialLabel(item.file!), () =>
+                      pool.run(() => pool.setCredential(item.file!, true))
+                    )
+                  }
                 >
                   {t('shell.disable')}
                 </Button>

@@ -65,31 +65,41 @@ export function classify(event: Record<string, unknown>): ErrorClass {
   if (/invalid_request|context_length|model_not_found|client/.test(hint)) return 'client';
   return 'other';
 }
-export function sanitize(value: unknown, secrets: string[] = []): unknown {
-  if (Array.isArray(value)) return value.map((v) => sanitize(v, secrets));
+export function sanitize(value: unknown, secrets: string[] = [], preserveKeys = false): unknown {
+  if (Array.isArray(value)) return value.map((v) => sanitize(v, secrets, preserveKeys));
   if (typeof value === 'string') {
     let text = value;
     for (const secret of secrets) if (secret) text = text.replaceAll(secret, '[redacted]');
-    const safe = text.replace(/Bearer\s+[^\s"']+/gi, 'Bearer [redacted]');
     try {
-      const parsed: unknown = JSON.parse(safe);
+      const parsed: unknown = JSON.parse(text);
       if (parsed !== null && typeof parsed === 'object')
-        return JSON.stringify(sanitize(parsed, secrets));
+        return JSON.stringify(sanitize(parsed, secrets, preserveKeys));
     } catch {
       /* Error bodies may be plain text. */
     }
-    return safe;
+    return text
+      .replace(/\bBearer\s+[^\s"'\\,;}[\]]+/gi, 'Bearer [redacted]')
+      .replace(
+        /(\b(?:x-api-key|x-management-key)["']?\s*:\s*["']?)[^\s"'\\,;}[\]]+/gi,
+        '$1[redacted]'
+      )
+      .replace(/\bsk-(?:ant-)?[a-z0-9_-]+/gi, '[redacted]')
+      .replace(
+        /("(?:access_token|refresh_token|id_token)"\s*:\s*)"(?:\\.|[^"\\])*"/gi,
+        '$1"[redacted]"'
+      );
   }
   if (value === null || typeof value !== 'object') return value;
   return Object.fromEntries(
-    Object.entries(object(value))
-      .filter(
-        ([key]) =>
-          !/^(api_key|user_api_key|authorization|x-management-key|management_key|access_token|refresh_token|id_token|password|secret|cookie|set-cookie)$/i.test(
-            key
-          )
+    Object.entries(object(value)).flatMap(([key, v]) => {
+      if (
+        /^(api_key|user_api_key|authorization|x-api-key|x-management-key|management_key|access_token|refresh_token|id_token|password|secret|cookie|set-cookie)$/i.test(
+          key
+        )
       )
-      .map(([key, v]) => [key, sanitize(v, secrets)])
+        return preserveKeys ? [[key, '[redacted]']] : [];
+      return [[key, sanitize(v, secrets, preserveKeys)]];
+    })
   );
 }
 export function telemetryTables(db: Database) {

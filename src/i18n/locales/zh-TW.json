@@ -2249,5 +2249,15 @@
     "unavailable": "重置暫不可用。",
     "rate_limited": "請求過於頻繁。",
     "auth_error": "授權遭拒。"
+  },
+  "shell": {
+    "pool_change_confirm": "確定對 {{name}} 的所有憑據執行{{action}}？",
+    "change_confirm": "確定對 {{name}} 執行{{action}}？",
+    "config_write_warning": "這將以 v8 格式儲存 config.yaml。舊版本無法讀取。",
+    "save_config": "儲存設定（v8）",
+    "runtime_credential_config": "請在供應商設定中管理此 API 金鑰。",
+    "relogin_confirm": "請以 {{name}} 登入以修復此帳戶。使用其他帳戶登入會新增憑據。",
+    "oauth_account_hint": "請使用同一帳戶登入以修復憑據。其他帳戶會新增憑據。",
+    "signin_provider": "登入 {{provider}}"
   }
 }

@@ -5,7 +5,7 @@ import { MainRoutes } from '@/router/MainRoutes';
 import { useAuthStore } from '@/stores';
 import { apiClient } from '@/services/api/client';
 import { pluginsApi } from '@/services/api';
-import { triggerHeaderRefresh } from '@/hooks/useHeaderRefresh';
+import { refreshShell } from './refresh';
 import {
   collectPluginResourceEntries,
   PLUGIN_RESOURCES_REFRESH_EVENT,
@@ -120,7 +120,7 @@ function Shell() {
         <button
           type="button"
           className={styles.headerAction}
-          onClick={() => void triggerHeaderRefresh()}
+          onClick={() => void refreshShell(pool.refresh)}
           disabled={pool.loading}
         >
           {t('shell.refresh')}

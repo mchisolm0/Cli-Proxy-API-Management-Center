@@ -56,6 +56,38 @@ describe('workspace quota observations', () => {
     });
     expect(quota[0]).toMatchObject({ id: 'gpt-6:primary', model: 'gpt-6', usedPercent: 100 });
   });
+  test('Codex relative resets expire attention and absolute resets take precedence', () => {
+    const observation = {
+      observed_at: new Date(now).toISOString(),
+      signals: {
+        'X-Codex-Primary-Used-Percent': '100',
+        'X-Codex-Primary-Reset-After-Seconds': '60',
+        'X-Codex-Limit-Reached': 'true',
+      },
+    };
+    const windows = parseQuotaSignals('codex', observation);
+    expect(windows[0]).toMatchObject({ resetAtMs: now + 60000, rejected: true });
+    expect(quotaIsCurrent(windows[0], now + 59999)).toBe(true);
+    expect(quotaIsCurrent(windows[0], now + 60000)).toBe(false);
+    expect(
+      deriveAttention([{ name: 'a', type: 'codex', quota: observation }], [], [], now + 60000)
+    ).toEqual([]);
+    expect(
+      parseQuotaSignals('codex', {
+        ...observation,
+        signals: {
+          ...observation.signals,
+          'x-codex-primary-reset-at': String((now + 120000) / 1000),
+        },
+      })[0].resetAtMs
+    ).toBe(now + 120000);
+    expect(
+      parseQuotaSignals('codex', { signals: { 'x-codex-limit-reached': 'true' } })[0]
+    ).toMatchObject({ rejected: true, usedPercent: null, resetAtMs: null });
+    expect(
+      parseQuotaSignals('codex', { signals: { 'x-codex-primary-reset-after-seconds': '60' } })
+    ).toEqual([]);
+  });
   test('reads case-insensitive Codex headers without assuming the primary duration', () => {
     const windows = parseQuotaSignals('codex', {
       signals: {
@@ -117,8 +149,39 @@ describe('home attention', () => {
       [],
       now
     );
-    expect(attention.map((item) => item.reason)).toEqual(['auth', 'disabled', 'problem']);
-    expect(attention[2].category).toBe('transport');
+    expect(attention.map((item) => item.reason)).toEqual(['auth', 'problem']);
+    expect(attention[1].category).toBe('transport');
+  });
+  test('a deliberately paused account does not hide another account or provider failures', () => {
+    const paused = [
+      {
+        name: 'paused.json',
+        type: 'codex',
+        disabled: true,
+        status: 'error',
+        statusMessage: 'invalid_grant',
+      },
+    ];
+    expect(deriveAttention(paused, [], [], now)).toEqual([]);
+    expect(deriveAttention(paused, [problem()], [], now).map((item) => item.reason)).toEqual([
+      'problem',
+    ]);
+    expect(
+      deriveAttention(
+        [
+          ...paused,
+          { name: 'broken.json', type: 'codex', status: 'error', statusMessage: 'invalid_grant' },
+        ],
+        [],
+        [],
+        now
+      ).map((item) => item.file?.name)
+    ).toEqual(['broken.json']);
+    const traffic = { provider: 'codex', failures: 2, errorCounts: { auth: 2 } } as ProviderHealth;
+    expect(deriveAttention(paused, [], [traffic], now)[0]).toMatchObject({
+      reason: 'traffic',
+      category: 'auth',
+    });
   });
   test('uses live cooldown deadlines and distinguishes transient failures from quota', () => {
     const attention = deriveAttention(
@@ -175,14 +238,28 @@ describe('home attention', () => {
 });
 
 describe('palette matching and scalar edits', () => {
-  test('detects configured scalars without replacing structured fields', () => {
+  test('only explicit inline settings are editable, including when critical scalars exist', () => {
     const settings = scalarSettingsFromConfig(
-      { server: { port: 8317, 'trusted-proxies': [] }, routing: { strategy: 'round-robin' } },
+      {
+        management: { 'secret-key': 'synthetic', 'allow-remote': true },
+        server: { host: '0.0.0.0', port: 8317, tls: { enable: true, cert: 'cert', key: 'key' } },
+        oauth: { 'auth-dir': '/synthetic' },
+        routing: { strategy: 'round-robin', retry: { 'request-retry': 7 } },
+      },
       CONFIG_FIELD_SEARCH_INDEX
     );
-    expect(settings.port).toMatchObject({ path: ['server', 'port'], fallback: 8317 });
-    expect(settings.routingStrategy.fallback).toBe('round-robin');
-    expect(settings.trustedProxies).toBeUndefined();
+    expect(Object.keys(settings).sort()).toEqual(Object.keys(INLINE_SETTINGS).sort());
+    expect(settings.requestRetry).toMatchObject({
+      path: ['routing', 'retry', 'request-retry'],
+      fallback: 7,
+      min: 0,
+    });
+    for (const field of CONFIG_FIELD_SEARCH_INDEX.filter((entry) =>
+      /^(management\.|server\.(host|port|tls)|oauth\.auth-dir)/.test(
+        entry.yamlKeys?.join('.') || ''
+      )
+    ))
+      expect(settings[field.fieldId]).toBeUndefined();
   });
   test('inline writes target the same v8 paths as the existing config editor', () => {
     for (const [fieldId, setting] of Object.entries(INLINE_SETTINGS)) {
@@ -237,6 +314,40 @@ describe('provider identity', () => {
     expect(
       credentialLabel({ name: 'secret', runtimeOnly: true, authIndex: '12', account: 'secret' })
     ).not.toContain('secret');
+  });
+  test('runtime API rows identify the configured key with a masked label', () => {
+    const secret = 'fixture-sensitive-client-key';
+    const runtime = { name: secret, runtimeOnly: true, authIndex: 'key-two', provider: 'codex' };
+    const providers = workspaceProviders(
+      {
+        codexApiKeys: [{ apiKey: secret, authIndex: 'key-two' }],
+        openaiCompatibility: [
+          {
+            name: 'Custom provider',
+            apiKeyEntries: [
+              { apiKey: 'other-sensitive-key', authIndex: 'key-one' },
+              { apiKey: secret, authIndex: 'key-two' },
+            ],
+          },
+        ],
+      },
+      [runtime]
+    );
+    const codex = credentialLabel(
+      runtime,
+      providers.find((entry) => entry.id === 'codex-api-key')
+    );
+    const openai = credentialLabel(
+      runtime,
+      providers.find((entry) => entry.id === 'openai:Custom provider')
+    );
+    expect(codex).toContain('codex API');
+    expect(openai).toContain('Custom provider');
+    for (const label of [codex, openai]) {
+      expect(label).not.toContain(secret);
+      expect(label).not.toContain('key-two');
+      expect(label).toContain('fi******ey');
+    }
   });
   test('matches API traffic by auth index without borrowing OAuth totals', () => {
     const providers = workspaceProviders(

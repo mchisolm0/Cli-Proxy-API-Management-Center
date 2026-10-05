@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { openSync, readSync, closeSync } from 'node:fs';
+import { openSync, readSync, closeSync, realpathSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inside, immutable } from './archive';
@@ -12,6 +12,7 @@ import { ingestFriction } from './friction';
 import { health, problems, parseRetryWindow } from './insights';
 import { seedFixtures } from './fixtures';
 import type { FiltersResponse, SessionDetail, RawRecordResponse } from './api';
+import { sanitize } from './telemetry/events';
 
 async function background(task: () => void | Promise<void>, warning: string) {
   try {
@@ -28,10 +29,11 @@ export function startIndexer(
   launch: () => { exited: Promise<number>; kill(): void } = () =>
     Bun.spawn({
       cmd: [process.execPath, fileURLToPath(new URL('./index.ts', import.meta.url))],
-      env: { ...process.env, ARCHIVE_ROOT: root, INDEX_PATH: destination },
+      env: { ...env, ARCHIVE_ROOT: root, INDEX_PATH: destination },
       stdout: 'inherit',
       stderr: 'inherit',
-    })
+    }),
+  env = process.env
 ) {
   let running = false,
     stopped = false;
@@ -67,7 +69,7 @@ export function startIndexer(
   };
 }
 
-export function rawRecord(root: string, pointerText: string): unknown {
+export function rawRecord(root: string, pointerText: string, key = managementKey()): unknown {
   const p = json(pointerText),
     path = inside(root, string(p.file));
   if (p.kind === 'jsonl') {
@@ -80,7 +82,7 @@ export function rawRecord(root: string, pointerText: string): unknown {
       const buffer = Buffer.alloc(length);
       const read = readSync(fd, buffer, 0, length, offset);
       if (read !== length) throw new Error('Archive record was truncated');
-      return json(buffer.toString('utf8'));
+      return sanitize(json(buffer.toString('utf8')), [key], true);
     } finally {
       closeSync(fd);
     }
@@ -97,7 +99,7 @@ export function rawRecord(root: string, pointerText: string): unknown {
   try {
     const row = db.query(`SELECT * FROM ${p.table} WHERE ${p.column}=?`).get(string(p.key));
     if (!row) throw new Error('Raw record no longer exists');
-    return row;
+    return sanitize(row, [key], true);
   } finally {
     db.close();
   }
@@ -106,9 +108,10 @@ export function handler(
   db: Database,
   root: string,
   assets = resolve('./dist'),
-  retryWindow = 35000
+  retryWindow = 35000,
+  loadKey = managementKey
 ) {
-  return async (request: Request): Promise<Response> => {
+  const respond = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     if (url.pathname !== '/' && url.pathname !== '/healthz' && !url.pathname.startsWith('/api/'))
       return new Response('Not found', { status: 404 });
@@ -164,7 +167,7 @@ export function handler(
           .query<{ pointer: string }, [number]>('SELECT pointer FROM item WHERE id=?')
           .get(Number(raw[1]));
         if (!row) return Response.json({ error: 'Item not found' }, { status: 404 });
-        const response: RawRecordResponse = { record: rawRecord(root, row.pointer) };
+        const response: RawRecordResponse = { record: rawRecord(root, row.pointer, loadKey()) };
         return Response.json(response);
       }
       if (url.pathname.startsWith('/api/'))
@@ -176,6 +179,7 @@ export function handler(
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
           'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-cache',
           // The single-file Vite build contains inline scripts and styles. Management
           // requests can target a user-configured proxy origin.
           'Content-Security-Policy':
@@ -189,6 +193,12 @@ export function handler(
       return Response.json({ error: 'Archive record unavailable' }, { status: 500 });
     }
   };
+  return async (request: Request) => {
+    const response = await respond(request);
+    if (/^\/api(?:\/|$)/.test(new URL(request.url).pathname))
+      response.headers.set('Cache-Control', 'no-store');
+    return response;
+  };
 }
 export function startDashboard(env = process.env) {
   const retryWindow = parseRetryWindow(env.CPA_RETRY_WINDOW_SECONDS);
@@ -197,15 +207,24 @@ export function startDashboard(env = process.env) {
   const indexedRoot = db
     .query<{ value: string }, [string]>('SELECT value FROM setting WHERE key=?')
     .get('archiveRoot')?.value;
-  const root = indexedRoot || resolve(env.ARCHIVE_ROOT || './fixtures/archive');
+  const configuredRoot = env.ARCHIVE_ROOT && resolve(env.ARCHIVE_ROOT);
+  const root = configuredRoot
+    ? existsSync(configuredRoot)
+      ? realpathSync(configuredRoot)
+      : configuredRoot
+    : indexedRoot || resolve('./fixtures/archive');
+  if (indexedRoot && indexedRoot !== root) {
+    db.close();
+    throw new Error('INDEX_PATH belongs to a different ARCHIVE_ROOT; use a new index path');
+  }
+  const loadKey = () => managementKey(env);
   const server = Bun.serve({
     hostname: env.BIND_HOST || '127.0.0.1',
     port: Number(env.PORT || 3000),
-    fetch: handler(db, root, undefined, retryWindow),
+    fetch: handler(db, root, undefined, retryWindow, loadKey),
   });
   console.log(`Dashboard: ${server.url}`);
-  const indexer = startIndexer(db, root, destination);
-  const loadKey = () => managementKey(env);
+  const indexer = startIndexer(db, root, destination, undefined, env);
   const addr = env.CPA_RESP_ADDR;
   const stops: (() => void)[] = [indexer.stop];
   if (!indexedRoot) void indexer.run();

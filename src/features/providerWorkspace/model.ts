@@ -3,6 +3,7 @@ import type { ProviderHealth } from '@/services/history';
 import { buildProviderGroups } from '@/features/providers/useProviderWorkbench';
 import type { ProviderBrand, ProviderResource } from '@/features/providers/types';
 import { normalizeOAuthProviderKey } from '@/utils/providerKeys';
+import { maskApiKey } from '@/utils/format';
 
 export type WorkspaceProvider = {
   id: string;
@@ -16,8 +17,20 @@ export type WorkspaceProvider = {
 
 export const providerPath = (id: string) => `/providers/${encodeURIComponent(id)}`;
 export const credentialId = (file: AuthFileItem) => `${file.name}:${file.authIndex ?? ''}`;
-export const credentialLabel = (file: AuthFileItem) =>
-  file.runtimeOnly ? String(file.authIndex ?? '') : file.email || file.name;
+export function credentialLabel(file: AuthFileItem, provider?: WorkspaceProvider) {
+  if (!file.runtimeOnly) return file.email || file.name;
+  const index = String(file.authIndex ?? '');
+  const resource = provider?.resources.find((entry) => resourceAuthIndices(entry).includes(index));
+  const key =
+    resource?.brand === 'openaiCompatibility'
+      ? (resource.raw as OpenAIProviderConfig).apiKeyEntries?.find(
+          (entry) => entry.authIndex === index
+        )?.apiKey
+      : undefined;
+  return [provider?.name, key ? maskApiKey(key) : resource?.apiKeyPreview || index]
+    .filter(Boolean)
+    .join(' · ');
+}
 export const workspaceChannel = (value: string) => {
   const normalized = normalizeOAuthProviderKey(value);
   return normalized === 'anthropic' ? 'claude' : normalized;

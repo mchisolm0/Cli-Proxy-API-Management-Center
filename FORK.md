@@ -32,7 +32,13 @@ ARCHIVE_ROOT=/path/to/archive INDEX_PATH=/path/to/index.sqlite bun run server:st
 
 The server handles `/`, `/api/*`, and `/healthz`. Configure a reverse proxy to send exactly those paths to port 3000 and all other paths to CLIProxyAPI, including `/v8/management/*`, `/v1/*`, and WebSocket upgrades. Hash routes need no HTTP route fallback. The UI build is only `dist/index.html`; no asset routes are required. `bun run dev` runs the management frontend alone; API routing for history during development must come from your local reverse proxy.
 
-History APIs have no built-in authentication. CPAMC's management login does not protect transcripts or `/api/*`. Use loopback or an authenticated private gateway. Native transcripts and raw records can contain secrets. Telemetry examples strip credential fields, usage `source`, response headers, and configured management keys.
+History APIs have no built-in authentication. CPAMC's management login does not protect transcripts or `/api/*`. Use loopback or an authenticated private gateway. Indexed transcripts and raw responses replace configured management keys, Bearer tokens, `x-api-key`/`X-Management-Key` header values, `sk-`/`sk-ant-` keys, and OAuth `access_token`/`refresh_token`/`id_token` values with `[redacted]`. The management key uses the existing file/env loader, including key-file reloads for raw requests. Native archives remain untouched and can still contain secrets. Telemetry examples also strip credential fields, usage `source`, and response headers.
+
+Existing indexed rows and parser caches are only redacted on reindex; unchanged snapshots are skipped by incremental indexing. Build a fresh `INDEX_PATH` to fully reindex an older archive. A fresh index also resets its event history. Raw records are redacted whenever served. `/api` responses use `Cache-Control: no-store`; the single-file UI uses `no-cache`.
+
+The first management config write migrates `config.yaml` to v8 format, which earlier backend versions cannot read. Palette inline edits are restricted to an explicit allowlist and labeled as v8 config saves. Lockout-critical settings open the config editor. Pool toggles require confirmation; config toggles disclose the migration. Runtime-only API keys open their provider workspace instead of using credential status toggles. Intentionally disabled accounts do not generate attention warnings. Per-account re-login requires signing in with the same account; choosing another account adds a credential, as stated before sign-in.
+
+An explicit `ARCHIVE_ROOT` takes precedence over the stored root. If it conflicts with an existing index, startup fails with an instruction to use a new index path, rather than serving pointers from another archive.
 
 ## Docker
 
@@ -100,6 +106,6 @@ bun run build
 bun run verify
 ```
 
-`bun test` runs both upstream and server tests, plus focused transcript tests. `verify` checks server types before running that full suite, lint, and the UI build; server tests are never silently excluded. Two upstream tests were already failing at integration time: `provider model options > gates fields by provider capability` and `cooldown section rendering > keeps the reset action contextual and exposes pending state`.
+`bun test` runs both upstream and server tests, plus focused transcript tests. `verify` checks server types before running that full suite, lint, and the UI build; server tests are never silently excluded. The current known upstream failure is `provider model options > gates fields by provider capability`.
 
 Upstream CPAMC and CLIProxyAPI remain credited in their original README and licenses. This fork preserves the upstream single-file build and hash routing. The history implementation is adapted from Matthew Chisolm's cpa-dashboard.

@@ -29,9 +29,15 @@ export function parseQuotaSignals(provider: string, observation: unknown): Quota
     return ['primary', 'secondary'].flatMap((id) => {
       const prefix = `x-codex-${id}`;
       const usedPercent = number(`${prefix}-used-percent`);
-      const resetAtMs = resolveResetMs([signals[`${prefix}-reset-at`]]);
+      const resetAfter = number(`${prefix}-reset-after-seconds`);
+      const resetAtMs =
+        resolveResetMs([signals[`${prefix}-reset-at`]]) ??
+        (observedAt !== null && resetAfter !== null ? observedAt + resetAfter * 1000 : null);
+      const rejected =
+        signals[`${prefix}-limit-reached`] === 'true' ||
+        (id === 'primary' && signals['x-codex-limit-reached'] === 'true');
       const minutes = number(`${prefix}-window-minutes`);
-      if (usedPercent === null && resetAtMs === null) return [];
+      if (usedPercent === null && resetAtMs === null && !rejected) return [];
       return [
         {
           id,
@@ -40,6 +46,7 @@ export function parseQuotaSignals(provider: string, observation: unknown): Quota
           resetAtMs,
           periodHours: minutes && minutes > 0 ? minutes / 60 : null,
           observedAt,
+          rejected,
         },
       ];
     });
