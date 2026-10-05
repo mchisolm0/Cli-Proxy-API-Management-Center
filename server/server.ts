@@ -7,7 +7,7 @@ import { json, string, number } from './model';
 import { openIndex, pruneEvents, type SessionRow, type ItemRow } from './db';
 import { search } from './search';
 import { startTelemetry } from './telemetry';
-import { dashboardProblem, managementKey, startAuthPoller } from './auth';
+import { dashboardProblem, managementKey, redactionSecrets, startAuthPoller } from './auth';
 import { ingestFriction } from './friction';
 import { health, problems, parseRetryWindow } from './insights';
 import { seedFixtures } from './fixtures';
@@ -69,7 +69,12 @@ export function startIndexer(
   };
 }
 
-export function rawRecord(root: string, pointerText: string, key = managementKey()): unknown {
+export function rawRecord(
+  root: string,
+  pointerText: string,
+  key = managementKey(),
+  secrets: string[] = []
+): unknown {
   const p = json(pointerText),
     path = inside(root, string(p.file));
   if (p.kind === 'jsonl') {
@@ -82,7 +87,7 @@ export function rawRecord(root: string, pointerText: string, key = managementKey
       const buffer = Buffer.alloc(length);
       const read = readSync(fd, buffer, 0, length, offset);
       if (read !== length) throw new Error('Archive record was truncated');
-      return sanitize(json(buffer.toString('utf8')), [key], true);
+      return sanitize(json(buffer.toString('utf8')), [key, ...secrets], true);
     } finally {
       closeSync(fd);
     }
@@ -99,7 +104,7 @@ export function rawRecord(root: string, pointerText: string, key = managementKey
   try {
     const row = db.query(`SELECT * FROM ${p.table} WHERE ${p.column}=?`).get(string(p.key));
     if (!row) throw new Error('Raw record no longer exists');
-    return sanitize(row, [key], true);
+    return sanitize(row, [key, ...secrets], true);
   } finally {
     db.close();
   }
@@ -167,7 +172,15 @@ export function handler(
           .query<{ pointer: string }, [number]>('SELECT pointer FROM item WHERE id=?')
           .get(Number(raw[1]));
         if (!row) return Response.json({ error: 'Item not found' }, { status: 404 });
-        const response: RawRecordResponse = { record: rawRecord(root, row.pointer, loadKey()) };
+        let key = '';
+        try {
+          key = loadKey();
+        } catch {
+          // Serve history with pattern/client-key redaction when the key file is unavailable.
+        }
+        const response: RawRecordResponse = {
+          record: rawRecord(root, row.pointer, key, redactionSecrets(db, key)),
+        };
         return Response.json(response);
       }
       if (url.pathname.startsWith('/api/'))

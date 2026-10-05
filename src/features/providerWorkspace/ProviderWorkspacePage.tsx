@@ -250,7 +250,7 @@ function Workspace({ id }: { id: string }) {
             }))
           );
       }
-    });
+    }, false);
   return (
     <div className={styles.page}>
       <header className={styles.header}>

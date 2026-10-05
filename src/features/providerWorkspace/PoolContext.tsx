@@ -122,8 +122,8 @@ function usePoolData() {
     };
   }, [refresh]);
 
-  const run = (action: () => Promise<unknown>) =>
-    enqueueMutation(async () => {
+  const run = (action: () => Promise<unknown>, mutation = true) => {
+    const execute = async () => {
       if (
         !connected ||
         !alive.current ||
@@ -131,22 +131,24 @@ function usePoolData() {
       )
         return;
       const revision = apiClient.getConnectionRevision();
-      setBusy(true);
+      if (mutation) setBusy(true);
       try {
         await action();
         if (!alive.current || revision !== apiClient.getConnectionRevision()) return;
-        notification(t('shell.saved'), 'success');
+        if (mutation) notification(t('shell.saved'), 'success');
       } catch (error) {
         if (alive.current && revision === apiClient.getConnectionRevision()) {
           notification(error instanceof Error ? error.message : t('shell.save_failed'), 'error');
         }
       } finally {
         if (alive.current && revision === apiClient.getConnectionRevision()) {
-          setBusy(false);
+          if (mutation) setBusy(false);
           await refresh();
         }
       }
-    });
+    };
+    return enqueueMutation(execute, mutation);
+  };
   const setCredential = async (file: AuthFileItem, disabled: boolean) => {
     if (file.runtimeOnly) throw new Error(t('shell.runtime_credential_config'));
     if (connectionRevision.current !== apiClient.getConnectionRevision() || !alive.current)
@@ -213,13 +215,7 @@ function usePoolData() {
         now,
         Object.fromEntries(data.files.map((file) => [credentialId(file), quotaForFile(file)]))
       ).map((item) => {
-        const matched = item.file?.runtimeOnly
-          ? providers.find((provider) =>
-              provider.resources.some((resource) =>
-                resourceAuthIndices(resource).includes(String(item.file?.authIndex))
-              )
-            )
-          : providers.find((provider) => provider.id === item.provider);
+        const matched = providers.find((provider) => provider.id === item.provider);
         const byModel =
           matched ??
           providers.find((provider) => provider.channel === item.provider) ??

@@ -2221,6 +2221,7 @@
     "auth_error": "Авторизация отклонена."
   },
   "shell": {
+    "open_signin": "Open sign-in link",
     "pool_change_confirm": "Применить «{{action}}» ко всем учётным данным в {{name}}?",
     "change_confirm": "Применить «{{action}}» к {{name}}?",
     "config_write_warning": "config.yaml будет сохранён в формате v8. Предыдущие версии не смогут его прочитать.",

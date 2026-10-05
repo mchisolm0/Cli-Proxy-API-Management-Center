@@ -4,8 +4,7 @@ import { files, snapshots } from "./archive";
 import { openIndex, type SessionRow } from "./db";
 import { codex, claude, opencode, t3, codexMetadata } from "./parsers";
 import { string, type Parsed, type Session, type Link } from "./model";
-import { managementKey } from './auth';
-import { sanitize } from './telemetry/events';
+import { dashboardProblem, managementKey, fetchClientKeys } from './auth';
 
 export const archiveRoot = () =>
   resolve(process.env.ARCHIVE_ROOT || "./fixtures/archive");
@@ -13,8 +12,12 @@ export const indexPath = () =>
   resolve(process.env.INDEX_PATH || "./data/index.sqlite");
 type Cache = { parsed: Parsed; metadata: Record<string, unknown>[] };
 
-export function buildIndex(root: string, destination: string, loadKey = managementKey) {
-  const key = loadKey();
+export function buildIndex(
+  root: string,
+  destination: string,
+  loadKey = managementKey,
+  clientKeys: string[] = []
+) {
   root = realpathSync(root);
   const db = openIndex(destination);
   const stats = {
@@ -24,6 +27,14 @@ export function buildIndex(root: string, destination: string, loadKey = manageme
     skippedFiles: 0,
   };
   try {
+    let key = '';
+    try {
+      key = loadKey();
+    } catch {
+      if (!db.query("SELECT 1 FROM dashboard_event WHERE code='redaction_key_unavailable'").get())
+        dashboardProblem(db, 'auth', 'redaction_key_unavailable');
+    }
+    const secrets = [key, ...clientKeys];
     const previous = db
       .query<{ value: string }, [string]>(
         "SELECT value FROM setting WHERE key=?",
@@ -49,7 +60,7 @@ export function buildIndex(root: string, destination: string, loadKey = manageme
           file,
           // No dev/ino: CIFS mounts report unstable inode numbers for hard
           // links, which made every run reparse unchanged snapshots.
-          signature: `${snap.host}/${file}:${st.size}:${st.mtimeNs}`,
+          signature: `r2:${snap.host}/${file}:${st.size}:${st.mtimeNs}`,
         };
       });
       const signature = Bun.hash(
@@ -86,13 +97,13 @@ export function buildIndex(root: string, destination: string, loadKey = manageme
         } else {
           const { path, file } = source;
           const parsed = file.startsWith(".claude/")
-            ? claude(path, file, [key])
+            ? claude(path, file, secrets)
             : file.endsWith("opencode.db")
-              ? opencode(path, file, [key])
+              ? opencode(path, file, secrets)
               : file.endsWith("state.sqlite")
-                ? t3(path, file, [key])
+                ? t3(path, file, secrets)
                 : file.endsWith(".jsonl")
-                  ? codex(path, file, [key])
+                  ? codex(path, file, secrets)
                   : { sessions: [], links: [] };
           result = {
             parsed,
@@ -100,11 +111,9 @@ export function buildIndex(root: string, destination: string, loadKey = manageme
               ? codexMetadata(path)
               : [],
           };
+          cacheRows.push([source.signature, JSON.stringify(result)]);
           stats.parsedFiles++;
         }
-        // Parsed/cache shapes are retained; only secret values and text are replaced.
-        result = sanitize(result, [key], true) as Cache;
-        cacheRows.push([source.signature, JSON.stringify(result)]);
         sessions.push(...result.parsed.sessions);
         links.push(...result.parsed.links);
         metadata.push(...result.metadata);
@@ -252,4 +261,14 @@ export function buildIndex(root: string, destination: string, loadKey = manageme
     db.close();
   }
 }
-if (import.meta.main) console.log(buildIndex(archiveRoot(), indexPath()));
+if (import.meta.main) {
+  let keys: string[] = [];
+  if (process.env.CPA_BASE_URL) {
+    try {
+      keys = await fetchClientKeys(process.env.CPA_BASE_URL, managementKey());
+    } catch {
+      // Indexing remains available when management access is unavailable.
+    }
+  }
+  console.log(buildIndex(archiveRoot(), indexPath(), managementKey, keys));
+}

@@ -65,35 +65,55 @@ export function classify(event: Record<string, unknown>): ErrorClass {
   if (/invalid_request|context_length|model_not_found|client/.test(hint)) return 'client';
   return 'other';
 }
+/** Replace secrets in place: JSON formatting and large integer literals remain intact. */
+export function redactText(value: string, secrets: string[] = []): string {
+  let text = value;
+  for (const secret of secrets) if (secret) text = text.replaceAll(secret, '[redacted]');
+  return text
+    .replace(
+      /(\bAuthorization(?:\\?["'])?[ \t]*:[ \t]*(?:\\?["'])?(?:Bearer|Basic)[ \t]+)[a-z0-9_+./~=-]{8,}/gi,
+      '$1[redacted]'
+    )
+    .replace(/\bBearer[ \t]+[a-z0-9_+./~=-]{20,}/gi, 'Bearer [redacted]')
+    .replace(
+      /(\b(?:x-api-key|x-goog-api-key|x-management-key)(?:\\?["'])?[ \t]*:[ \t]*(?:\\?["'])?)[a-z0-9_+./~=-]{8,}/gi,
+      '$1[redacted]'
+    )
+    .replace(/\bsk-(?:ant-[a-z0-9_-]{20,}|(?!ant-)[a-z0-9_-]{20,})/gi, '[redacted]')
+    .replace(
+      /(\b(?:\w+[_-])*(?:key|token|secret|password|api[-_]?key|client[_-]?secret)(?:\\?["'])?[ \t]*[:=][ \t]*)(\\"|\\'|"|')(?:(?!\2)(?:\\\\\\.|\\.|[^\\]))*?\2/gi,
+      '$1$2[redacted]$2'
+    )
+    .replace(
+      /(\b(?:\w+[_-])*(?:key|token|secret|password|api[-_]?key|client[_-]?secret)(?:\\?["'])?[ \t]*[:=][ \t]*)[a-z0-9_+./~%-]{8,}={0,2}/gi,
+      '$1[redacted]'
+    )
+    .replace(/\bapi-keys:[ \t]*(?:\r?\n[ \t]+-[^\r\n]*)+/gi, (list) =>
+      list.replace(/^([ \t]*-[ \t]+)(?:"[^"]*"|'[^']*'|[^\s#]+)/gm, '$1[redacted]')
+    )
+    .replace(
+      /(\bapi-keys:[ \t]*\[)((?:"[^"]*"|'[^']*'|[^\]\r\n])*)(\])/gi,
+      (_match, start: string, list: string, end: string) =>
+        start + list.replace(/"[^"]*"|'[^']*'|[^\s,]+/g, '"[redacted]"') + end
+    );
+}
+
 export function sanitize(value: unknown, secrets: string[] = [], preserveKeys = false): unknown {
   if (Array.isArray(value)) return value.map((v) => sanitize(v, secrets, preserveKeys));
-  if (typeof value === 'string') {
-    let text = value;
-    for (const secret of secrets) if (secret) text = text.replaceAll(secret, '[redacted]');
-    try {
-      const parsed: unknown = JSON.parse(text);
-      if (parsed !== null && typeof parsed === 'object')
-        return JSON.stringify(sanitize(parsed, secrets, preserveKeys));
-    } catch {
-      /* Error bodies may be plain text. */
-    }
-    return text
-      .replace(/\bBearer\s+[^\s"'\\,;}[\]]+/gi, 'Bearer [redacted]')
-      .replace(
-        /(\b(?:x-api-key|x-management-key)["']?\s*:\s*["']?)[^\s"'\\,;}[\]]+/gi,
-        '$1[redacted]'
-      )
-      .replace(/\bsk-(?:ant-)?[a-z0-9_-]+/gi, '[redacted]')
-      .replace(
-        /("(?:access_token|refresh_token|id_token)"\s*:\s*)"(?:\\.|[^"\\])*"/gi,
-        '$1"[redacted]"'
-      );
-  }
+  if (typeof value === 'string') return redactText(value, secrets);
   if (value === null || typeof value !== 'object') return value;
   return Object.fromEntries(
     Object.entries(object(value)).flatMap(([key, v]) => {
+      // Native locations and pointers must still resolve, even when they resemble keys.
       if (
-        /^(api_key|user_api_key|authorization|x-api-key|x-management-key|management_key|access_token|refresh_token|id_token|password|secret|cookie|set-cookie)$/i.test(
+        preserveKeys &&
+        /^(pointer|file|path|cwd|repo|branch|git_branch|gitBranch|git|directory|worktree_path|repository_url)$/i.test(
+          key
+        )
+      )
+        return [[key, v]];
+      if (
+        /^(key|token|api[-_]?keys?|user_api_key|client[_-]?secret|authorization|x-api-key|x-goog-api-key|x-management-key|management_key|access_token|refresh_token|id_token|password|secret|cookie|set-cookie)$/i.test(
           key
         )
       )

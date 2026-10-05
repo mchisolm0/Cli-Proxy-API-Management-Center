@@ -2225,6 +2225,7 @@
     "auth_error": "授权被拒绝。"
   },
   "shell": {
+    "open_signin": "Open sign-in link",
     "pool_change_confirm": "确定对 {{name}} 的所有凭据执行{{action}}？",
     "change_confirm": "确定对 {{name}} 执行{{action}}？",
     "config_write_warning": "这将以 v8 格式保存 config.yaml。旧版本无法读取。",

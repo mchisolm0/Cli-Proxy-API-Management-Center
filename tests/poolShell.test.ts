@@ -9,6 +9,7 @@ import { deriveAttention } from '../src/features/home/attention';
 import {
   INLINE_SETTINGS,
   parseScalarValue,
+  scalarValueChanged,
   rankCommands,
   scalarSettingsFromConfig,
 } from '../src/features/palette/ranking';
@@ -291,7 +292,7 @@ describe('palette matching and scalar edits', () => {
 });
 
 describe('provider identity', () => {
-  test('separates OAuth and API keys and never uses a runtime credential secret as a label', () => {
+  test('separates OAuth and API keys and hides runtime websocket credential names', () => {
     const providers = workspaceProviders(
       {
         codexApiKeys: [{ apiKey: 'fixture-key' }],
@@ -301,7 +302,7 @@ describe('provider identity', () => {
       },
       [
         { name: 'codex.json', provider: 'codex' },
-        { name: 'sensitive-key', provider: 'codex', runtimeOnly: true },
+        { name: 'websocket-client', provider: 'aistudio', runtimeOnly: true },
       ]
     );
     expect(providers.map((provider) => provider.id)).toEqual([
@@ -314,40 +315,6 @@ describe('provider identity', () => {
     expect(
       credentialLabel({ name: 'secret', runtimeOnly: true, authIndex: '12', account: 'secret' })
     ).not.toContain('secret');
-  });
-  test('runtime API rows identify the configured key with a masked label', () => {
-    const secret = 'fixture-sensitive-client-key';
-    const runtime = { name: secret, runtimeOnly: true, authIndex: 'key-two', provider: 'codex' };
-    const providers = workspaceProviders(
-      {
-        codexApiKeys: [{ apiKey: secret, authIndex: 'key-two' }],
-        openaiCompatibility: [
-          {
-            name: 'Custom provider',
-            apiKeyEntries: [
-              { apiKey: 'other-sensitive-key', authIndex: 'key-one' },
-              { apiKey: secret, authIndex: 'key-two' },
-            ],
-          },
-        ],
-      },
-      [runtime]
-    );
-    const codex = credentialLabel(
-      runtime,
-      providers.find((entry) => entry.id === 'codex-api-key')
-    );
-    const openai = credentialLabel(
-      runtime,
-      providers.find((entry) => entry.id === 'openai:Custom provider')
-    );
-    expect(codex).toContain('codex API');
-    expect(openai).toContain('Custom provider');
-    for (const label of [codex, openai]) {
-      expect(label).not.toContain(secret);
-      expect(label).not.toContain('key-two');
-      expect(label).toContain('fi******ey');
-    }
   });
   test('matches API traffic by auth index without borrowing OAuth totals', () => {
     const providers = workspaceProviders(
@@ -377,4 +344,18 @@ describe('provider identity', () => {
     expect(providerTraffic(providers[0], [traffic])).toMatchObject({ requests: 100, failures: 0 });
     expect(providerTraffic(providers[2], [traffic])).toMatchObject({ requests: 50, failures: 10 });
   });
+});
+
+test('palette scalar edits only save changed, valid values', () => {
+  const number = INLINE_SETTINGS.requestRetry;
+  expect(scalarValueChanged(number, '3', 3)).toBe(false);
+  expect(scalarValueChanged(number, '03', 3)).toBe(false);
+  expect(scalarValueChanged(number, '4', 3)).toBe(true);
+  expect(scalarValueChanged(number, '', 3)).toBe(false);
+  expect(scalarValueChanged(number, '-1', 3)).toBe(false);
+  expect(scalarValueChanged(number, '4', undefined)).toBe(false);
+  expect(scalarValueChanged(INLINE_SETTINGS.debug, false, false)).toBe(false);
+  expect(scalarValueChanged(INLINE_SETTINGS.debug, true, false)).toBe(true);
+  expect(scalarValueChanged(INLINE_SETTINGS.proxyUrl, '', '')).toBe(false);
+  expect(scalarValueChanged(INLINE_SETTINGS.proxyUrl, 'http://localhost:8080', '')).toBe(true);
 });

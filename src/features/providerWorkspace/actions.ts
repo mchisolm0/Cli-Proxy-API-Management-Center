@@ -38,10 +38,11 @@ export function confirmAccountLogin(name: string, onConfirm: () => void) {
   });
 }
 
-/** Keep confirmed actions in order, including confirmations opened during another mutation. */
+/** Keep mutations in order; reads bypass pending mutations and never hold up later actions. */
 export function createMutationQueue() {
   let pending = Promise.resolve();
-  return (action: () => Promise<void>) => {
+  return (action: () => Promise<void>, mutation = true) => {
+    if (!mutation) return action();
     const next = pending.then(action);
     pending = next.catch(() => {});
     return next;

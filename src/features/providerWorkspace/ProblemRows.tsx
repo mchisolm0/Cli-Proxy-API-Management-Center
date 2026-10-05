@@ -40,7 +40,7 @@ export function ProblemRows({
         return (
           <div key={item.id} className={styles.problem} data-category={item.category}>
             <div>
-              <strong>{item.file ? credentialLabel(item.file, provider) : name}</strong>
+              <strong>{item.file ? credentialLabel(item.file) : name}</strong>
               <p>
                 {t(`shell.attention_${item.reason}`, {
                   provider: name,

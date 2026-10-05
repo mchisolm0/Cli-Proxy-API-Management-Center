@@ -13,6 +13,7 @@ import { usePool } from '@/features/providerWorkspace/PoolContext';
 import { credentialId, credentialLabel, providerPath } from '@/features/providerWorkspace/model';
 import {
   parseScalarValue,
+  scalarValueChanged,
   rankCommands,
   scalarSettingsFromConfig,
   type ScalarSetting,
@@ -40,6 +41,7 @@ function SettingEditor({
   const setting = command.setting;
   const [draft, setDraft] = useState<string | boolean>('');
   const [ready, setReady] = useState(false);
+  const [original, setOriginal] = useState<ScalarSetting['fallback']>();
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -50,9 +52,13 @@ function SettingEditor({
     void getConfigValue<unknown>(`/config/${setting.path.join('/')}`, setting.fallback)
       .then((value) => {
         if (!active.current || revision.current !== apiClient.getConnectionRevision()) return;
-        if (typeof value !== typeof setting.fallback)
+        if (
+          (typeof value !== 'boolean' && typeof value !== 'number' && typeof value !== 'string') ||
+          typeof value !== typeof setting.fallback
+        )
           throw new Error(t('shell.setting_type_error'));
         setDraft(typeof value === 'boolean' ? value : String(value));
+        setOriginal(value);
         setReady(true);
       })
       .catch((cause) => {
@@ -63,11 +69,13 @@ function SettingEditor({
       active.current = false;
     };
   }, [setting, t]);
+  const changed = scalarValueChanged(setting, draft, original);
   return (
     <form
       className={styles.settingEditor}
       onSubmit={async (event) => {
         event.preventDefault();
+        if (!ready || saving || !changed) return;
         setSaving(true);
         setError('');
         setMessage('');
@@ -80,7 +88,10 @@ function SettingEditor({
           await applyConfigPatch({ patch, deletions: [] }, revision.current);
           useConfigStore.getState().clearCache();
           await useConfigStore.getState().fetchConfig(true);
-          if (active.current) setMessage(t('shell.saved'));
+          if (active.current) {
+            setOriginal(value);
+            setMessage(t('shell.saved'));
+          }
         } catch (cause) {
           if (active.current)
             setError(cause instanceof Error ? cause.message : t('shell.save_failed'));
@@ -119,7 +130,7 @@ function SettingEditor({
       )}
       <p>{t('shell.config_write_warning')}</p>
       <div className={styles.actions}>
-        <Button type="submit" disabled={!ready || saving}>
+        <Button type="submit" disabled={!ready || saving || !changed}>
           {t('shell.save_config')}
         </Button>
         <Button variant="ghost" disabled={saving} onClick={onBack}>

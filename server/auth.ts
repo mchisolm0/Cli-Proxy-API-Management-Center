@@ -15,6 +15,38 @@ export function managementKey(env = process.env): string {
   }
   return (env.CPA_MANAGEMENT_KEY || '').trim();
 }
+
+// Scoped to the connection's database lifetime; never persisted with auth states or events.
+const clientKeyCache = new WeakMap<Database, string[]>();
+export function redactionSecrets(db: Database, key: string): string[] {
+  return [key, ...(clientKeyCache.get(db) || [])];
+}
+
+export async function fetchClientKeys(
+  base: string,
+  key: string,
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal
+): Promise<string[]> {
+  if (!key) throw new Error('Missing management key');
+  const url = new URL('/v8/management/config', base);
+  if (!/^https?:$/.test(url.protocol) || url.username || url.password)
+    throw new Error('Invalid CPA_BASE_URL');
+  const response = await fetcher(url, {
+    headers: { Authorization: `Bearer ${key}` },
+    redirect: 'error',
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+      : AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw response;
+  const config = object(await response.json());
+  const keys = object(config.access)['api-keys'];
+  if (keys === undefined) return [];
+  if (!Array.isArray(keys) || !keys.every((value): value is string => typeof value === 'string'))
+    throw new Error('Invalid client API keys');
+  return keys.filter(Boolean);
+}
 export type Cooldown = {
   scope: string;
   model: string;
@@ -241,7 +273,17 @@ export async function pollAuth(
       throw new Error('Poll rejected');
     }
     const value: unknown = await response.json();
-    const states = parseAuthFiles(sanitize(value, [key]));
+    try {
+      const keys = await fetchClientKeys(base, key, fetcher, signal);
+      if (!signal?.aborted) clientKeyCache.set(db, keys);
+    } catch (error) {
+      if (!signal?.aborted) {
+        if (error instanceof Response && (error.status === 401 || error.status === 403))
+          managementRejected(db, 'config_poll', `config_poll_http_${error.status}`);
+        else dashboardProblem(db, 'transport', 'redaction_keys_refresh_failed');
+      }
+    }
+    const states = parseAuthFiles(sanitize(value, redactionSecrets(db, key)));
     if (!signal?.aborted) {
       storeAuthFiles(db, states);
       managementAccepted(db, 'auth_poll');

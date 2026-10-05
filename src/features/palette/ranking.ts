@@ -103,3 +103,17 @@ export function parseScalarValue(setting: ScalarSetting, draft: string | boolean
     throw new Error('Invalid number');
   return value;
 }
+
+/** Compare parsed values so equivalent numeric drafts cannot trigger a config migration. */
+export function scalarValueChanged(
+  setting: ScalarSetting,
+  draft: string | boolean,
+  original: ScalarSetting['fallback'] | undefined
+): boolean {
+  if (original === undefined) return false;
+  try {
+    return parseScalarValue(setting, draft) !== original;
+  } catch {
+    return false;
+  }
+}

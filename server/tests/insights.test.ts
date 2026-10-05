@@ -178,6 +178,7 @@ test('polls send the Bearer key and store safe states, failures are dashboard pr
   try {
     const fetcher: typeof fetch = Object.assign(
       async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith('/config')) return Response.json({ access: { 'api-keys': [] } });
         expect(String(input)).toBe('http://synthetic.invalid/v8/management/credentials');
         expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer synthetic-secret');
         expect(init?.redirect).toBe('error');
@@ -716,7 +717,7 @@ test('API validates windows and sanitization removes nested credentials and JSON
       sanitize({
         api_key: 'top-secret',
         nested: { Authorization: 'Bearer nested-secret' },
-        body: '{"refresh_token":"body-secret","error":"Bearer plain-secret"}',
+        body: '{"refresh_token":"body-secret","error":"Bearer plain-secret-12345678901234567890"}',
       })
     );
     for (const secret of ['top-secret', 'nested-secret', 'body-secret', 'plain-secret'])

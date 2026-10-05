@@ -8,6 +8,7 @@ import {
   managementRetryAt,
   managementRejected,
   managementAccepted,
+  redactionSecrets,
 } from "../auth";
 
 export function startTelemetry(
@@ -159,7 +160,7 @@ export function startTelemetry(
               typeof response[2] === "string"
             ) {
               try {
-                const event = object(sanitize(json(response[2]), [key]));
+                const event = object(sanitize(json(response[2]), redactionSecrets(db, key)));
                 if (channel === "usage") {
                   delete event.source;
                   delete event.response_headers;

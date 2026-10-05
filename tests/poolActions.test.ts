@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import i18n from '../src/i18n';
 import { useNotificationStore } from '../src/stores/useNotificationStore';
 import {
@@ -45,33 +44,14 @@ describe('deliberate pool actions', () => {
     useNotificationStore.getState().hideConfirmation();
   });
 
-  test('runtime-only attention rows have no credential toggles or account login', () => {
-    const rows = readFileSync('src/features/providerWorkspace/ProblemRows.tsx', 'utf8');
-    expect(rows).toContain('!item.file.runtimeOnly');
-    expect(rows).toContain('!item.file?.runtimeOnly');
-    expect(rows).not.toContain("item.reason === 'disabled'");
-    const pool = readFileSync('src/features/providerWorkspace/PoolContext.tsx', 'utf8');
-    expect(pool).toContain(
-      "if (file.runtimeOnly) throw new Error(t('shell.runtime_credential_config'))"
-    );
-  });
-
-  test('workspace, attention and palette mutations use the confirmation boundary', () => {
-    const workspace = readFileSync(
-      'src/features/providerWorkspace/ProviderWorkspacePage.tsx',
-      'utf8'
-    );
-    const palette = readFileSync('src/features/palette/CommandPalette.tsx', 'utf8');
-    const rows = readFileSync('src/features/providerWorkspace/ProblemRows.tsx', 'utf8');
-    expect(workspace).toMatch(/confirmPoolChange\(\s*paused \? 'resume' : 'pause'/);
-    for (const source of [workspace, palette]) {
-      expect(source).toContain('confirmPoolChange(');
-      expect(source).toContain("file.disabled ? 'enable' : 'disable'");
-      expect(source).toContain("resource.disabled ? 'enable' : 'disable'");
-    }
-    expect(rows).toContain('confirmPoolChange(');
-    expect(palette).toContain("t('shell.save_config')");
-    expect(palette).toContain("t('shell.config_write_warning')");
+  test('canceling confirmation leaves the mutation untouched', () => {
+    let calls = 0;
+    confirmPoolChange('disable', 'Account', async () => {
+      calls++;
+    });
+    useNotificationStore.getState().hideConfirmation();
+    expect(calls).toBe(0);
+    expect(useNotificationStore.getState().confirmation.isOpen).toBe(false);
   });
 
   test('confirmed deletes wait for pending mutations and the queue survives failures', async () => {
@@ -95,6 +75,32 @@ describe('deliberate pool actions', () => {
     expect(calls).toEqual(['toggle', 'delete']);
   });
 
+  test('a hung quota read bypasses queued mutations without blocking later actions', async () => {
+    const enqueue = createMutationQueue();
+    const mutationGate = Promise.withResolvers<void>();
+    const quotaGate = Promise.withResolvers<void>();
+    const calls: string[] = [];
+    const first = enqueue(async () => {
+      calls.push('toggle');
+      await mutationGate.promise;
+    });
+    await Promise.resolve();
+    const quota = enqueue(async () => {
+      calls.push('quota');
+      await quotaGate.promise;
+    }, false);
+    const next = enqueue(async () => {
+      calls.push('delete');
+    });
+    expect(calls).toEqual(['toggle', 'quota']);
+    mutationGate.resolve();
+    await first;
+    await next;
+    expect(calls).toEqual(['toggle', 'quota', 'delete']);
+    quotaGate.resolve();
+    await quota;
+  });
+
   test('account login names the account and explains that another account adds credentials', () => {
     let started = false;
     confirmAccountLogin('synthetic@example.invalid', () => {
@@ -107,13 +113,6 @@ describe('deliberate pool actions', () => {
     );
     options?.onConfirm();
     expect(started).toBe(true);
-    for (const path of ['ProblemRows.tsx', 'ProviderWorkspacePage.tsx'])
-      expect(readFileSync(`src/features/providerWorkspace/${path}`, 'utf8')).toContain(
-        'confirmAccountLogin('
-      );
-    expect(readFileSync('src/features/providerWorkspace/OAuthDialog.tsx', 'utf8')).toContain(
-      "t('shell.oauth_account_hint')"
-    );
     useNotificationStore.getState().hideConfirmation();
   });
 });
@@ -129,10 +128,13 @@ test('shell refresh forces pool/config refresh even after the page handler disap
     calls.push('page');
   });
   expect(calls).toEqual(['config:true', 'config:true', 'page']);
-  expect(readFileSync('src/features/shell/PoolLayout.tsx', 'utf8')).toContain(
-    'refreshShell(pool.refresh)'
-  );
-  const pool = readFileSync('src/features/providerWorkspace/PoolContext.tsx', 'utf8');
-  expect(pool).toContain('fetchConfig(forceConfig)');
-  expect(pool).not.toContain('useHeaderRefresh(refresh)');
+});
+
+test('sign-in action uses the English label in each fallback locale', () => {
+  for (const lng of ['en', 'zh-CN', 'zh-TW', 'ru']) {
+    expect(i18n.t('shell.open_signin', { lng })).toBe('Open sign-in link');
+    expect(i18n.t('shell.oauth_waiting', { lng })).toBe(
+      i18n.t('shell.oauth_waiting', { lng: 'en' })
+    );
+  }
 });

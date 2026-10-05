@@ -2251,6 +2251,7 @@
     "auth_error": "授權遭拒。"
   },
   "shell": {
+    "open_signin": "Open sign-in link",
     "pool_change_confirm": "確定對 {{name}} 的所有憑據執行{{action}}？",
     "change_confirm": "確定對 {{name}} 執行{{action}}？",
     "config_write_warning": "這將以 v8 格式儲存 config.yaml。舊版本無法讀取。",
