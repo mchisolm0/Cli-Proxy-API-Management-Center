@@ -1,0 +1,295 @@
+import { Database } from "bun:sqlite";
+import { openSync, readSync, closeSync } from "node:fs";
+import { resolve, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { inside, immutable } from "./archive";
+import { json, string, number } from "./model";
+import { openIndex, pruneEvents, type SessionRow, type ItemRow } from "./db";
+import { search } from "./search";
+import { startTelemetry } from "./telemetry";
+import { dashboardProblem, managementKey, startAuthPoller } from "./auth";
+import { ingestFriction } from "./friction";
+import { health, problems, parseRetryWindow } from "./insights";
+import { seedFixtures } from "./fixtures";
+
+async function background(task: () => void | Promise<void>, warning: string) {
+  try {
+    await task();
+  } catch {
+    console.warn(warning);
+  }
+}
+
+export function startIndexer(
+  db: Database,
+  root: string,
+  destination: string,
+  launch: () => { exited: Promise<number>; kill(): void } = () =>
+    Bun.spawn({
+      cmd: [
+        process.execPath,
+        fileURLToPath(new URL("./index.ts", import.meta.url)),
+      ],
+      env: { ...process.env, ARCHIVE_ROOT: root, INDEX_PATH: destination },
+      stdout: "inherit",
+      stderr: "inherit",
+    }),
+) {
+  let running = false,
+    stopped = false;
+  let child: ReturnType<typeof launch> | undefined;
+  const run = async () => {
+    if (running || stopped) return;
+    running = true;
+    try {
+      child = launch();
+      const status = await child.exited;
+      if (stopped) return;
+      if (status !== 0) throw new Error("Indexer failed");
+      seedFixtures(db, root);
+    } catch {
+      if (!stopped) {
+        console.warn("Indexing failed");
+        await background(
+          () => dashboardProblem(db, "other", "index_failed"),
+          "Index failure could not be stored",
+        );
+      }
+    } finally {
+      child = undefined;
+      running = false;
+    }
+  };
+  return {
+    run,
+    stop: () => {
+      stopped = true;
+      child?.kill();
+    },
+  };
+}
+
+export function rawRecord(root: string, pointerText: string): unknown {
+  const p = json(pointerText),
+    path = inside(root, string(p.file));
+  if (p.kind === "jsonl") {
+    const offset = number(p.offset),
+      length = number(p.length);
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isSafeInteger(length) ||
+      length < 0
+    )
+      throw new Error("Invalid byte pointer");
+    const fd = openSync(path, "r");
+    try {
+      const buffer = Buffer.alloc(length);
+      const read = readSync(fd, buffer, 0, length, offset);
+      if (read !== length) throw new Error("Archive record was truncated");
+      return json(buffer.toString("utf8"));
+    } finally {
+      closeSync(fd);
+    }
+  }
+  if (
+    p.kind !== "sqlite" ||
+    !(
+      (p.table === "part" && p.column === "id") ||
+      (p.table === "projection_thread_messages" && p.column === "message_id")
+    )
+  )
+    throw new Error("Invalid SQLite pointer");
+  const db = immutable(path);
+  try {
+    const row = db
+      .query(`SELECT * FROM ${p.table} WHERE ${p.column}=?`)
+      .get(string(p.key));
+    if (!row) throw new Error("Raw record no longer exists");
+    return row;
+  } finally {
+    db.close();
+  }
+}
+export function handler(
+  db: Database,
+  root: string,
+  assets = resolve("./dist"),
+  retryWindow = 35000,
+) {
+  return async (request: Request): Promise<Response> => {
+    const url = new URL(request.url);
+    if (request.method !== "GET")
+      return Response.json({ error: "Method not allowed" }, { status: 405 });
+    try {
+      if (url.pathname === "/healthz") return new Response("ok");
+      if (url.pathname === "/api/health" || url.pathname === "/api/problems") {
+        try {
+          return Response.json(
+            url.pathname === "/api/health"
+              ? health(db, url.searchParams.get("window"))
+              : problems(db, url.searchParams.get("window"), Date.now(), retryWindow),
+          );
+        } catch (error) {
+          if (error instanceof Error && error.message.startsWith("Window must"))
+            return Response.json({ error: error.message }, { status: 400 });
+          throw error;
+        }
+      }
+      if (url.pathname === "/api/search")
+        return Response.json(search(db, url.searchParams));
+      if (url.pathname === "/api/filters")
+        return Response.json({
+          hosts: db
+            .query<{ host: string }, []>(
+              "SELECT DISTINCT host FROM session ORDER BY host",
+            )
+            .all()
+            .map((r) => r.host),
+          models: db
+            .query<{ model: string }, []>(
+              "SELECT DISTINCT model FROM session WHERE model<>'' ORDER BY model",
+            )
+            .all()
+            .map((r) => r.model),
+        });
+      const detail = /^\/api\/sessions\/(\d+)$/.exec(url.pathname);
+      if (detail) {
+        const session = db
+          .query<SessionRow, [number]>("SELECT * FROM session WHERE id=?")
+          .get(Number(detail[1]));
+        if (!session)
+          return Response.json({ error: "Session not found" }, { status: 404 });
+        const items = db
+          .query<ItemRow, [number]>(
+            "SELECT * FROM item WHERE sessionId=? ORDER BY seq",
+          )
+          .all(session.id)
+          .map(({ pointer, ...i }) => i);
+        return Response.json({ session, items });
+      }
+      const raw = /^\/api\/items\/(\d+)\/raw$/.exec(url.pathname);
+      if (raw) {
+        const row = db
+          .query<{ pointer: string }, [number]>(
+            "SELECT pointer FROM item WHERE id=?",
+          )
+          .get(Number(raw[1]));
+        if (!row)
+          return Response.json({ error: "Item not found" }, { status: 404 });
+        return Response.json({ record: rawRecord(root, row.pointer) });
+      }
+      if (url.pathname.startsWith("/api/"))
+        return Response.json({ error: "Not found" }, { status: 404 });
+      let path: string;
+      try {
+        path = inside(
+          assets,
+          decodeURIComponent(url.pathname).replace(/^\//, "") || "index.html",
+        );
+      } catch {
+        return new Response("Not found", { status: 404 });
+      }
+      if (relative(assets, path).startsWith(".."))
+        return new Response("Not found", { status: 404 });
+      const file = Bun.file(path);
+      return new Response(file, {
+        headers: {
+          "Content-Type": file.type,
+          "X-Content-Type-Options": "nosniff",
+          "Content-Security-Policy":
+            "default-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'",
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Request failed";
+      if (url.pathname === "/api/search")
+        return Response.json({ error: message }, { status: 400 });
+      console.error(message);
+      return Response.json(
+        { error: "Archive record unavailable" },
+        { status: 500 },
+      );
+    }
+  };
+}
+export function startDashboard(env = process.env) {
+  const retryWindow = parseRetryWindow(env.CPA_RETRY_WINDOW_SECONDS);
+  const destination = resolve(env.INDEX_PATH || "./data/index.sqlite");
+  const db = openIndex(destination, 250);
+  const indexedRoot = db
+    .query<{ value: string }, [string]>("SELECT value FROM setting WHERE key=?")
+    .get("archiveRoot")?.value;
+  const root = indexedRoot || resolve(env.ARCHIVE_ROOT || "./fixtures/archive");
+  const server = Bun.serve({
+    hostname: env.BIND_HOST || "127.0.0.1",
+    port: Number(env.PORT || 3000),
+    fetch: handler(db, root, undefined, retryWindow),
+  });
+  console.log(`Dashboard: ${server.url}`);
+  const indexer = startIndexer(db, root, destination);
+  const loadKey = () => managementKey(env);
+  const addr = env.CPA_RESP_ADDR;
+  const stops: (() => void)[] = [indexer.stop];
+  if (!indexedRoot) void indexer.run();
+  else void background(() => seedFixtures(db, root), "Fixture ingestion failed");
+  const prune = () => background(() => pruneEvents(db), "Event pruning failed");
+  void prune();
+  const pruneTimer = setInterval(() => void prune(), 3600000);
+  stops.push(() => clearInterval(pruneTimer));
+  if (addr) {
+    try {
+      stops.push(startTelemetry(db, addr, loadKey));
+    } catch {
+      void background(
+        () => dashboardProblem(db, "auth", "telemetry_configuration_failed"),
+        "Telemetry configuration failure could not be stored",
+      );
+      console.warn(
+        "Telemetry could not start; check address and management key configuration",
+      );
+    }
+  }
+  if (
+    env.CPA_BASE_URL &&
+    (env.CPA_MANAGEMENT_KEY_FILE || env.CPA_MANAGEMENT_KEY)
+  )
+    stops.push(startAuthPoller(db, env.CPA_BASE_URL, loadKey));
+  if (env.FRICTION_PATHS) {
+    const paths = env.FRICTION_PATHS;
+    const ingest = () =>
+      background(() => ingestFriction(db, paths), "Friction ingestion failed");
+    void ingest();
+    const timer = setInterval(() => void ingest(), 60000);
+    stops.push(() => clearInterval(timer));
+  }
+  if (env.INDEX_INTERVAL_MINUTES) {
+    const minutes = Number(env.INDEX_INTERVAL_MINUTES);
+    if (
+      !Number.isFinite(minutes) ||
+      minutes <= 0 ||
+      minutes * 60000 > 2147483647
+    )
+      throw new Error(
+        "INDEX_INTERVAL_MINUTES must be positive and at most 35791",
+      );
+    const timer = setInterval(
+      () => void background(indexer.run, "Index scheduling failed"),
+      minutes * 60000,
+    );
+    stops.push(() => clearInterval(timer));
+  }
+  return () => {
+    stops.forEach((stop) => stop());
+    server.stop(true);
+    db.close();
+  };
+}
+if (import.meta.main) {
+  const stop = startDashboard();
+  for (const signal of ["SIGINT", "SIGTERM"] as const)
+    process.on(signal, () => {
+      stop();
+      process.exit(0);
+    });
+}
