@@ -16,7 +16,10 @@ export function ProviderTable({ known }: { known: boolean }) {
     <div className={styles.providerTable}>
       {pool.providers.map((provider) => {
         const windows = headlineQuota(pool.quotaForProvider(provider), pool.now);
-        const usage = providerTraffic(provider, pool.health?.providers ?? []);
+        // A loaded health window without matching traffic means idle, not unknown.
+        const usage =
+          providerTraffic(provider, pool.health?.providers ?? []) ??
+          (pool.health ? { requests: 0, failures: 0, p50: null } : null);
         return (
           <Link key={provider.id} to={providerPath(provider.id)}>
             <span className={styles.providerName}>
@@ -48,7 +51,7 @@ export function ProviderTable({ known }: { known: boolean }) {
               <small>{t('shell.failed')}</small>
             </span>
             <span className={styles.figure}>
-              {formatSeconds(usage?.p50 ?? null) ?? '?'}
+              {formatSeconds(usage?.p50 ?? null) ?? t(usage ? 'shell.none' : 'shell.unknown')}
               <small>{t('shell.p50')}</small>
             </span>
           </Link>

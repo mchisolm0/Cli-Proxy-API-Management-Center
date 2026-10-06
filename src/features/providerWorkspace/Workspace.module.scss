@@ -135,11 +135,16 @@
 }
 .modelColumns {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 30px;
 }
+.exposedList {
+  columns: 2 200px;
+  column-gap: 24px;
+}
 .modelRow {
-  padding: 7px 0;
+  padding: 3px 0;
+  break-inside: avoid;
   overflow-wrap: anywhere;
   font-size: 13px;
 }

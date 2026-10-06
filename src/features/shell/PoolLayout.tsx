@@ -87,7 +87,7 @@ function Shell() {
     <NavLink
       key={path}
       to={path}
-      end={path === '/'}
+      end={path === '/' || path === '/providers'}
       className={({ isActive }) =>
         isActive || also.some((prefix) => location.pathname.startsWith(prefix)) ? styles.active : ''
       }

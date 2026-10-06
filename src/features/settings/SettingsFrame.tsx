@@ -39,7 +39,7 @@ export function AdvancedPage() {
   const tools: [string, string, string][] = [
     ['/auth-files', 'nav.auth_files', 'shell.advanced_auth_files'],
     ['/oauth', 'nav.oauth', 'shell.advanced_oauth'],
-    ['/quota', 'nav.quota', 'shell.advanced_quota'],
+    ['/quota', 'nav.quota_management', 'shell.advanced_quota'],
     ['/ai-providers', 'nav.ai_providers', 'shell.advanced_ai_providers'],
     ['/problems', 'shell.problems', 'shell.advanced_problems'],
     ['/dashboard', 'nav.dashboard', 'shell.advanced_dashboard'],

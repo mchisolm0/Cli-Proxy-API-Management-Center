@@ -162,8 +162,14 @@ function Workspace({ id }: { id: string }) {
         <Link to="/providers">{t('shell.providers')}</Link>
       </div>
     );
-  const traffic = providerTraffic(provider, pool.health?.providers ?? []);
-  const problems = pool.attention.filter((item) => item.provider === provider.id);
+  // No matching traffic in a loaded health window means an idle provider, not an unknown one.
+  const traffic =
+    providerTraffic(provider, pool.health?.providers ?? []) ??
+    (pool.health ? { requests: 0, failures: 0, tokens: 0, p50: null, ttft: null } : null);
+  // Low quota already shows on the account's bars; alerts here are things to fix.
+  const problems = pool.attention.filter(
+    (item) => item.provider === provider.id && item.reason !== 'quota_high'
+  );
   const paused = providerPaused(provider);
   const status = providerStatus(
     provider,
@@ -303,8 +309,8 @@ function Workspace({ id }: { id: string }) {
                 : '?',
               t('shell.failed'),
             ],
-            [formatSeconds(traffic?.p50 ?? null) ?? '?', t('shell.p50_latency')],
-            [formatSeconds(traffic?.ttft ?? null) ?? '?', t('shell.first_token')],
+            [formatSeconds(traffic?.p50 ?? null) ?? t('shell.none'), t('shell.p50_latency')],
+            [formatSeconds(traffic?.ttft ?? null) ?? t('shell.none'), t('shell.first_token')],
             [traffic ? formatCount(traffic.tokens) : '?', t('shell.tokens')],
           ] as const
         ).map(([value, label]) => (
@@ -571,15 +577,13 @@ function Workspace({ id }: { id: string }) {
         <div className={styles.modelColumns}>
           <div>
             <h3>{t('shell.exposed')}</h3>
-            {[
-              ...new Set(
-                provider.oauth ? models : provider.resources.flatMap((resource) => resource.models)
-              ),
-            ].map((model) => (
-              <div className={styles.modelRow} key={model}>
-                {model}
-              </div>
-            ))}
+            <div className={styles.exposedList}>
+              {[...exposed].map((model) => (
+                <div className={styles.modelRow} key={model}>
+                  {model}
+                </div>
+              ))}
+            </div>
           </div>
           <div>
             <h3>{t('shell.aliases')}</h3>
@@ -589,9 +593,17 @@ function Workspace({ id }: { id: string }) {
                   (resource) => (resource.raw as ProviderKeyConfig).models ?? []
                 )
             )
-              .filter((alias) => alias.alias)
-              .map((alias, index) => (
-                <div className={styles.modelRow} key={index}>
+              // An alias equal to its model name changes nothing; repeated blocks repeat it.
+              .filter(
+                (alias, index, all) =>
+                  alias.alias &&
+                  alias.alias !== alias.name &&
+                  all.findIndex(
+                    (other) => other.alias === alias.alias && other.name === alias.name
+                  ) === index
+              )
+              .map((alias) => (
+                <div className={styles.modelRow} key={`${alias.alias}:${alias.name}`}>
                   {alias.alias} → {alias.name}
                 </div>
               ))}
