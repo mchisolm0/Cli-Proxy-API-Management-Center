@@ -1026,12 +1026,15 @@ test('standalone JWT, PEM, Google, GitHub, GitLab and Slack formats redact witho
 });
 
 test('CLI credential flags and indented YAML scalar values redact with their layout intact', () => {
-  for (const flag of ['--api-key ', '--token ', '--password ', '-p']) {
-    expect(redactText(`command ${flag}short --other keep`)).toBe(
+  for (const flag of ['--api-key ', '--token ', '--password ', '--client-secret ']) {
+    expect(redactText(`command ${flag}s3cr3t-value --other keep`)).toBe(
       `command ${flag}[redacted] --other keep`
     );
+    expect(redactText(`${flag}s3cr3t-value`)).toBe(`${flag}[redacted]`);
+    expect(redactText(`ok\n${flag}s3cr3t-value`)).toBe(`ok\n${flag}[redacted]`);
     expect(redactText(`${flag}"short"`)).toBe(`${flag}"[redacted]"`);
   }
+  expect(redactText('the --token flag is optional')).toBe('the --token flag is optional');
   for (const scalar of ['', '|', '|-', '>+', '|2', '|2-', '|-2']) {
     const text = `outer:\n  privateKey: ${scalar}\n    first-secret\n    second-secret\n  ordinary: keep`;
     const expected = `outer:\n  privateKey: ${scalar}\n    [redacted]\n    [redacted]\n  ordinary: keep`;
@@ -1156,4 +1159,30 @@ test('large indexed bodies and repository URLs stay useful and safe in storage a
     db?.close();
     rmSync(temp, { recursive: true, force: true });
   }
+});
+
+test('run-together credential names, URL username tokens and short shell flags', () => {
+  for (const name of ['apikey', 'APIKey', 'APIKEY', 'x-apikey', 'JWTSecret', 'APIToken']) {
+    expect(redactText(`${name}=SEKRETVALUE123456`)).toBe(`${name}=[redacted]`);
+    expect(JSON.stringify(sanitize({ [name]: 'SEKRETVALUE123456' }, [], true))).not.toContain(
+      'SEKRETVALUE'
+    );
+  }
+  expect(redactText('?apikey=SEKRETVALUE123456&q=1')).not.toContain('SEKRETVALUE');
+  const token = `ghp_${'a1'.repeat(18)}`;
+  expect(redactText(`git clone https://${token}@github.com/o/r.git`)).toBe(
+    'git clone https://[redacted]@github.com/o/r.git'
+  );
+  expect(redactText('https://matt@github.com/o/r.git')).toBe('https://matt@github.com/o/r.git');
+  for (const command of [
+    'find . -path ./node_modules -prune -o -print',
+    'gcc -pthread main.c',
+    'grep -Po "x"',
+    'ssh -p2222 host',
+    'docker run -p8080:80 img',
+    'mkdir -pv a/b',
+    'rsync -Pav a b',
+    'xargs -P4 echo',
+  ])
+    expect(redactText(command)).toBe(command);
 });
