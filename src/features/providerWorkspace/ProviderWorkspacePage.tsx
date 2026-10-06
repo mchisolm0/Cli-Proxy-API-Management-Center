@@ -40,16 +40,20 @@ import { OAuthDialog } from './OAuthDialog';
 import { confirmAccountLogin, confirmPoolChange } from './actions';
 import styles from './Workspace.module.scss';
 
+const pressure = (window: QuotaWindow) => (window.rejected ? Infinity : (window.usedPercent ?? -1));
+
 function lastReadings(windows: QuotaWindow[], now: number): QuotaWindow[] {
   const byPeriod = new Map<string, QuotaWindow>();
   for (const window of windows) {
     if (window.model || (window.resetAtMs !== null && window.resetAtMs <= now)) continue;
     const key = window.periodHours === null ? window.label : String(window.periodHours);
     const previous = byPeriod.get(key);
-    if (!previous || (window.observedAt ?? 0) > (previous.observedAt ?? 0))
-      byPeriod.set(key, window);
+    // Same choice as headlineQuota: the fullest reading per period.
+    if (!previous || pressure(window) > pressure(previous)) byPeriod.set(key, window);
   }
-  return [...byPeriod.values()];
+  return [...byPeriod.values()].sort(
+    (a, b) => (a.periodHours ?? Infinity) - (b.periodHours ?? Infinity)
+  );
 }
 
 /** Headline 5 hour / weekly bars; per-model windows stay one click away. */
