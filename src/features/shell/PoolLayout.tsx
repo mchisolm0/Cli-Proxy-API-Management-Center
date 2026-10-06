@@ -81,7 +81,7 @@ function Shell() {
       window.removeEventListener(PLUGIN_RESOURCES_REFRESH_EVENT, load);
     };
   }, [supportsPlugin]);
-  const known = !pool.loading && !pool.errors.includes('credentials');
+  const known = pool.known;
   /** `also` keeps a section highlighted across its sibling routes (Settings tabs). */
   const nav = (path: string, label: string, also: string[] = []) => (
     <NavLink

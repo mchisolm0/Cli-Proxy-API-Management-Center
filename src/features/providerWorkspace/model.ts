@@ -8,6 +8,8 @@ export type WorkspaceProvider = {
   id: string;
   name: string;
   channel: string;
+  /** Every channel this provider answers to; merged providers collect several. */
+  channels: string[];
   oauth: boolean;
   brand: ProviderBrand | null;
   files: AuthFileItem[];
@@ -38,6 +40,7 @@ export function workspaceProviders(
     id: channel,
     name: channel === 'codex' ? 'Codex' : channel === 'claude' ? 'Claude' : channel,
     channel,
+    channels: [channel],
     oauth: true,
     brand: null,
     resources: [],
@@ -54,6 +57,7 @@ export function workspaceProviders(
           id,
           name: resource.name || 'OpenAI',
           channel: workspaceChannel(resource.name || 'openai'),
+          channels: [workspaceChannel(resource.name || 'openai')],
           oauth: false,
           brand: group.id,
           files: [],
@@ -65,6 +69,7 @@ export function workspaceProviders(
         id: `${group.id}-api-key`,
         name: `${group.id} API`,
         channel: group.id,
+        channels: [group.id],
         oauth: false,
         brand: group.id,
         files: [],
@@ -108,7 +113,8 @@ function mergeSharedEndpoints(providers: WorkspaceProvider[]): WorkspaceProvider
       continue;
     }
     existing.resources = [...existing.resources, ...provider.resources];
-    // Keep the OpenAI-compatible identity: its sheet can add keys to the shared endpoint.
+    existing.channels = [...new Set([...existing.channels, ...provider.channels])];
+    // Prefer the OpenAI-compatible identity: its key list is where Add key appends.
     if (provider.brand === 'openaiCompatibility') {
       existing.id = provider.id;
       existing.brand = provider.brand;
@@ -138,7 +144,11 @@ export function providerTraffic(provider: WorkspaceProvider, health: ProviderHea
   const credentials = health
     .flatMap((item) => item.credentials)
     .filter((credential) => indices.has(credential.authIndex));
-  const named = health.find((item) => workspaceChannel(item.provider) === provider.channel);
+  const matches = health.filter((item) =>
+    provider.channels.includes(workspaceChannel(item.provider))
+  );
+  // Name-level totals only stand in when exactly one health entry matches.
+  const named = matches.length === 1 ? matches[0] : undefined;
   if (credentials.length) {
     // Percentiles cannot be averaged across credential distributions.
     const percentiles =

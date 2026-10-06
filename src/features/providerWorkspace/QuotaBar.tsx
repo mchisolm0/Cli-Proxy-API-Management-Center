@@ -36,7 +36,8 @@ export function QuotaBar({
         aria-label={name}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={percent === null ? undefined : Math.round(percent)}
+        aria-valuenow={window.rejected ? 100 : percent === null ? undefined : Math.round(percent)}
+        aria-valuetext={window.rejected ? t('shell.exhausted') : undefined}
       >
         <i style={{ width: `${Math.min(100, window.rejected ? 100 : (percent ?? 0))}%` }} />
       </span>

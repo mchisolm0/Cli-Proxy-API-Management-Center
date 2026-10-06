@@ -401,6 +401,8 @@ describe('provider identity', () => {
       brand: 'openaiCompatibility',
     });
     expect(merged[0].resources).toHaveLength(3);
+    // Alerts and traffic named after either block still find the merged provider.
+    expect(merged[0].channels.sort()).toEqual(['meta', 'opencode-go']);
   });
   test('matches API traffic by auth index without borrowing OAuth totals', () => {
     const providers = workspaceProviders(

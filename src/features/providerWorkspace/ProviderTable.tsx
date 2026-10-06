@@ -45,9 +45,11 @@ export function ProviderTable({ known }: { known: boolean }) {
               <small>{t('shell.req_24h')}</small>
             </span>
             <span className={styles.figure}>
-              {usage && usage.requests
-                ? `${Math.round((usage.failures / usage.requests) * 100)}%`
-                : '0%'}
+              {!usage
+                ? '?'
+                : usage.requests
+                  ? `${Math.round((usage.failures / usage.requests) * 100)}%`
+                  : '0%'}
               <small>{t('shell.failed')}</small>
             </span>
             <span className={styles.figure}>

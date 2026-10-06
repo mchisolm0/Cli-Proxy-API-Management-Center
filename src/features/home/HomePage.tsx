@@ -22,7 +22,7 @@ export function HomePage() {
   const version = useAuthStore((state) => state.serverVersion);
   const [login, setLogin] = useState<string | null>(null);
   const { traffic, counts, credentials } = overview;
-  const known = !pool.loading && !pool.errors.includes('credentials');
+  const known = pool.known;
   const stats: [string, string][] = [
     [
       formatCount(traffic.total),

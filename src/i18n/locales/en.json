@@ -2398,6 +2398,7 @@
     "status_unknown": "Status unknown",
     "settings_config": "Config",
     "none": "n/a",
+    "edit": "Edit",
     "advanced_auth_files": "Upload, download and edit raw credential files.",
     "advanced_oauth": "Sign in to any OAuth provider CLIProxyAPI supports.",
     "advanced_quota": "Quota for every credential across all providers.",

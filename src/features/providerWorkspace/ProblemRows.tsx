@@ -25,7 +25,7 @@ export function ProblemRows({
     <div className={styles.alerts}>
       {items.map((item) => {
         const provider = pool.providers.find(
-          (entry) => entry.id === item.provider || entry.channel === item.provider
+          (entry) => entry.id === item.provider || entry.channels.includes(item.provider)
         );
         const name = provider?.name || item.provider || t('shell.proxy');
         const login =

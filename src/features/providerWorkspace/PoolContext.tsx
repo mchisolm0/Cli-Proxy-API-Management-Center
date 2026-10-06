@@ -61,6 +61,10 @@ function usePoolData() {
   const [data, setData] = useState(empty);
   const [now, setNow] = useState(Date.now);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
   const request = useRef(0);
   const abort = useRef<AbortController | null>(null);
   const alive = useRef(true);
@@ -95,16 +99,18 @@ function usePoolData() {
         return;
       const [files, health, problems, recent] = results;
       const labels = ['credentials', 'health', 'problems', 'sessions', 'settings'];
-      setData({
-        files: files.status === 'fulfilled' ? files.value.files : [],
-        health: health.status === 'fulfilled' ? health.value : null,
-        problems: problems.status === 'fulfilled' ? problems.value : null,
-        recent: recent.status === 'fulfilled' ? recent.value : null,
+      // A failed background poll keeps the last good data instead of emptying the page.
+      setData((previous) => ({
+        files: files.status === 'fulfilled' ? files.value.files : quiet ? previous.files : [],
+        health: health.status === 'fulfilled' ? health.value : quiet ? previous.health : null,
+        problems:
+          problems.status === 'fulfilled' ? problems.value : quiet ? previous.problems : null,
+        recent: recent.status === 'fulfilled' ? recent.value : quiet ? previous.recent : null,
         errors: results.flatMap((result, index) =>
           result.status === 'rejected' ? [labels[index]] : []
         ),
         loading: false,
-      });
+      }));
     },
     [connected, fetchConfig]
   );
@@ -114,7 +120,8 @@ function usePoolData() {
     void refresh();
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     const poll = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refresh(false, true);
+      // Mutations refresh when they finish; polling mid-way would show half-applied state.
+      if (document.visibilityState === 'visible' && !busyRef.current) void refresh(false, true);
     }, 60_000);
     const onFilesChanged = () => void refresh();
     window.addEventListener(AUTH_FILES_CHANGED_EVENT, onFilesChanged);
@@ -223,7 +230,7 @@ function usePoolData() {
         const matched = providers.find((provider) => provider.id === item.provider);
         const byModel =
           matched ??
-          providers.find((provider) => provider.channel === item.provider) ??
+          providers.find((provider) => provider.channels.includes(item.provider)) ??
           providers.find(
             (provider) =>
               item.problem?.model &&
@@ -233,8 +240,13 @@ function usePoolData() {
       }),
     [data, now, providers, quotaForFile]
   );
+  // Health is only "known" when every source an alert could come from loaded.
+  const known =
+    !data.loading &&
+    !data.errors.some((source) => ['credentials', 'health', 'problems'].includes(source));
   return {
     ...data,
+    known,
     now,
     providers,
     attention,

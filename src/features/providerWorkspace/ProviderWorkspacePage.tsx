@@ -27,6 +27,7 @@ import {
   providerTraffic,
   workspaceChannel,
   workspaceProviders,
+  type WorkspaceProvider,
 } from './model';
 import { headlineQuota, windowLabel, type QuotaWindow } from './quotaSignals';
 import { QuotaBar } from './QuotaBar';
@@ -42,9 +43,12 @@ import styles from './Workspace.module.scss';
 /** Headline 5 hour / weekly bars; per-model windows stay one click away. */
 function QuotaMeters({ windows, now }: { windows: QuotaWindow[]; now: number }) {
   const { t } = useTranslation();
-  const headline = headlineQuota(windows, now);
+  const current = headlineQuota(windows, now);
+  // With nothing current, show the last readings marked stale rather than nothing.
+  const headline = current.length ? current : windows.filter((window) => !window.model);
   const perModel = windows.filter((window) => window.model);
-  if (!windows.length) return <p className={styles.muted}>{t('shell.quota_unknown')}</p>;
+  if (!headline.length && !perModel.length)
+    return <p className={styles.muted}>{t('shell.quota_unknown')}</p>;
   return (
     <div className={styles.meters}>
       {headline.map((window) => (
@@ -83,9 +87,16 @@ export function ProvidersPage() {
           </Link>
         </div>
       </header>
-      <ProviderTable known={!pool.loading && !pool.errors.includes('credentials')} />
+      <ProviderTable known={pool.known} />
     </div>
   );
+}
+
+/** The OpenAI-compatible block of a provider merged from several blocks. */
+function sharedResource(provider: WorkspaceProvider) {
+  return provider.resources.length > 1
+    ? provider.resources.find((resource) => resource.brand === 'openaiCompatibility')
+    : undefined;
 }
 
 export function ProviderWorkspacePage() {
@@ -113,6 +124,10 @@ function Workspace({ id }: { id: string }) {
   const [modelsError, setModelsError] = useState(false);
   const showConfirmation = useNotificationStore((state) => state.showConfirmation);
   const loadedAction = useRef(false);
+  const enabledAccounts = (provider?.files ?? [])
+    .filter((file) => !file.disabled)
+    .map((file) => file.name)
+    .join('|');
 
   useEffect(() => {
     if (!provider?.oauth) return;
@@ -138,19 +153,22 @@ function Workspace({ id }: { id: string }) {
     return () => {
       active = false;
     };
-  }, [provider?.oauth, provider?.channel, provider?.files]);
+    // Polling replaces the files array every minute; refetch only when the account set changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider?.oauth, provider?.channel, enabledAccounts]);
 
   useEffect(() => {
     if (!provider || loadedAction.current) return;
     if ((params.get('edit') === 'models' || params.get('add') === '1') && provider.brand) {
       loadedAction.current = true;
-      const resource = provider.resources[0] ?? null;
-      setSheet({
-        open: true,
-        mode: params.get('add') === '1' ? 'create' : 'edit',
-        brand: provider.brand,
-        resource: params.get('add') === '1' ? null : resource,
-      });
+      const resource = sharedResource(provider) ?? provider.resources[0] ?? null;
+      setSheet(
+        params.get('add') === '1' && !sharedResource(provider)
+          ? { open: true, mode: 'create', brand: provider.brand, resource: null }
+          : resource
+            ? { open: true, mode: 'edit', brand: resource.brand, resource }
+            : { open: true, mode: 'create', brand: provider.brand, resource: null }
+      );
       setParams({}, { replace: true });
     }
   }, [params, provider, setParams]);
@@ -182,15 +200,18 @@ function Workspace({ id }: { id: string }) {
   const recent = (pool.recent?.sessions ?? [])
     .filter(
       (session) =>
-        (session.provider && workspaceChannel(session.provider) === provider.channel) ||
+        (session.provider && provider.channels.includes(workspaceChannel(session.provider))) ||
         exposed.has(session.model)
     )
     .slice(0, 5);
   const loginSupported =
     provider.oauth &&
     ['codex', 'claude', 'antigravity', 'kimi', 'xai', 'devin', 'meta'].includes(provider.channel);
+  const shared = sharedResource(provider);
   const add = () => {
     if (loginSupported) setLogin(provider.channel);
+    // A merged endpoint gets its new key in the OpenAI-compatible block's key list.
+    else if (shared) setSheet({ open: true, brand: shared.brand, mode: 'edit', resource: shared });
     else if (provider.brand)
       setSheet({ open: true, brand: provider.brand, mode: 'create', resource: null });
   };
@@ -437,7 +458,7 @@ function Workspace({ id }: { id: string }) {
                       setSheet({ open: true, mode: 'edit', brand: resource.brand, resource })
                     }
                   >
-                    {t('shell.replace')}
+                    {t('shell.edit')}
                   </Button>
                   <Button
                     size="sm"
@@ -551,7 +572,8 @@ function Workspace({ id }: { id: string }) {
                 </Link>
               </>
             ) : (
-              provider.resources[0] && (
+              // Several blocks: each block's Edit opens its own models.
+              provider.resources.length === 1 && (
                 <Button
                   size="sm"
                   onClick={() =>
