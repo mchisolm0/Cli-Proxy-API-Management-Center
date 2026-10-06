@@ -13,7 +13,7 @@ import {
   redactionSecrets,
   managementRetryAt,
 } from '../auth';
-import { redactText, sanitize } from '../telemetry/events';
+import { redactText, redactIndexedText, sanitize } from '../telemetry/events';
 import { handler, rawRecord, startDashboard, startIndexer } from '../server';
 
 const secrets = [
@@ -171,7 +171,7 @@ test('generic key/token values preserve code and prose, and quoted values stop a
   }
 });
 
-test('redaction of adversarial blobs, identifiers and a 100 KB transcript stays under 50 ms', () => {
+test('redaction scans adversarial inputs and a 100 KB transcript within a generous wall-clock bound', () => {
   // Deterministic base64url, including many underscores and no assignment delimiter.
   const blob = Buffer.from(Array.from({ length: 3840 }, (_, i) => (i * 71 + 255) % 256)).toString(
     'base64url'
@@ -180,18 +180,28 @@ test('redaction of adversarial blobs, identifiers and a 100 KB transcript stays 
   const transcript = ('ordinary code: const key = providerKeyFor(model); ' + blob + '\n')
     .repeat(21)
     .slice(0, 100 * 1024);
-  for (const text of [
-    blob,
-    identifier,
-    transcript,
-    '_'.repeat(5120),
-    'a-'.repeat(5120),
-    'api-keys: ['.repeat(5000),
-  ]) {
-    const started = performance.now();
-    const safe = redactText(text);
-    expect(performance.now() - started).toBeLessThan(50);
-    if (!text.startsWith('api-keys: [')) expect(safe).toBe(text);
+  // Measure the complete scans without allowing the 25 ms budget to hide slow patterns.
+  const now = spyOn(performance, 'now').mockReturnValue(0);
+  try {
+    for (const text of [
+      blob,
+      identifier,
+      transcript,
+      '_'.repeat(5120),
+      'a-'.repeat(5120),
+      'api-keys: ['.repeat(5000),
+      'eyJ-'.repeat(25 * 1024),
+      'eyJ-'.repeat(25 * 1024) + '.incomplete',
+      '-----BEGIN PRIVATE KEY-----\n'.repeat(4000),
+    ]) {
+      const started = process.hrtime.bigint();
+      const safe = redactText(text);
+      expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(500);
+      if (!text.startsWith('api-keys: [') && !text.startsWith('-----BEGIN'))
+        expect(safe).toBe(text);
+    }
+  } finally {
+    now.mockRestore();
   }
 });
 
@@ -200,6 +210,7 @@ test('redaction discards the entire body when its time or size budget is exceede
   let elapsed = 0;
   now.mockImplementation(() => (elapsed += 30));
   try {
+    expect(redactIndexedText('ordinary prose '.repeat(80000))).toStartWith('ordinary prose ');
     expect(redactText('ordinary text fixture-client-secret', ['fixture-client-secret'])).toBe(
       '[redacted]'
     );
@@ -212,7 +223,7 @@ test('redaction discards the entire body when its time or size budget is exceede
 test('all native parsers redact bodies before truncation can leave a partial secret', () => {
   const root = mkdtempSync('/tmp/pool-redaction-boundary-');
   const secret = 'fixture-management-boundary-key';
-  const text = 'x'.repeat(8185) + secret;
+  const text = 'x'.repeat(8185) + secret + ' ordinary prose'.repeat(80000);
   try {
     const codexFile = join(root, 'codex.jsonl'),
       claudeFile = join(root, 'claude.jsonl');
@@ -719,10 +730,10 @@ test('superseded cache rows are deleted once after success and shared files writ
     expect(buildIndex(root, index).parsedFiles).toBe(1);
     db = openIndex(index);
     db.run(
-      "UPDATE file_cache SET signature='r2:' || substr(signature,4); UPDATE snapshot SET signature='legacy'; DELETE FROM setting WHERE key='cachePrefix'"
+      "UPDATE file_cache SET signature='r3:' || substr(signature,4); UPDATE snapshot SET signature='legacy'; DELETE FROM setting WHERE key='cachePrefix'"
     );
     expect(buildIndex(root, index).parsedFiles).toBe(1);
-    expect(db.query("SELECT * FROM file_cache WHERE signature NOT LIKE 'r3:%'").all()).toEqual([]);
+    expect(db.query("SELECT * FROM file_cache WHERE signature NOT LIKE 'r4:%'").all()).toEqual([]);
     // Cleanup is a once-per-version migration, not a repeated table scan.
     db.run(
       "CREATE TABLE cache_deletes(signature TEXT); CREATE TRIGGER cache_delete AFTER DELETE ON file_cache BEGIN INSERT INTO cache_deletes VALUES(old.signature); END; INSERT INTO file_cache VALUES('legacy-after-migration','{}')"
@@ -765,15 +776,15 @@ test('a failed index run leaves superseded cache rows until a successful migrati
     );
     const file = join(snapshot, '.codex/sessions/session.jsonl');
     writeFileSync(file, '{}');
-    db.query('INSERT INTO file_cache VALUES(?,?)').run('r2:old', '{}');
+    db.query('INSERT INTO file_cache VALUES(?,?)').run('r3:old', '{}');
     expect(() => buildIndex(root, index)).toThrow('Missing Codex session id');
-    expect(db.query('SELECT signature FROM file_cache').all()).toEqual([{ signature: 'r2:old' }]);
+    expect(db.query('SELECT signature FROM file_cache').all()).toEqual([{ signature: 'r3:old' }]);
     expect(db.query("SELECT * FROM setting WHERE key='cachePrefix'").get()).toBeNull();
     writeFileSync(file, JSON.stringify({ type: 'session_meta', payload: { id: 'fixed' } }));
     expect(buildIndex(root, index).parsedFiles).toBe(1);
-    expect(db.query("SELECT * FROM file_cache WHERE signature NOT LIKE 'r3:%'").all()).toEqual([]);
+    expect(db.query("SELECT * FROM file_cache WHERE signature NOT LIKE 'r4:%'").all()).toEqual([]);
     expect(db.query("SELECT value FROM setting WHERE key='cachePrefix'").get()).toEqual({
-      value: 'r3:',
+      value: 'r4:',
     });
   } finally {
     db.close();
@@ -946,6 +957,203 @@ test('auth polls refresh client-key secrets in memory for raw responses and inde
       expect(JSON.stringify(db.query(`SELECT * FROM ${table}`).all())).not.toContain(client);
   } finally {
     db.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('camelCase and suffixed credential names redact text and raw fields, preserving code values', () => {
+  for (const name of [
+    'accessToken',
+    'refreshToken',
+    'authToken',
+    'secretAccessKey',
+    'privateKey',
+    'clientSecret',
+    'apiKey',
+    'sessionToken',
+    'SECRET_KEY_BASE',
+    'API_KEY_PROD',
+  ]) {
+    for (const text of [
+      `${name}=short`,
+      `{"${name}":"short"}`,
+      String.raw`{\"${name}\":\"short\"}`,
+    ]) {
+      expect(redactText(text)).toBe(text.replace('short', '[redacted]'));
+    }
+    expect(sanitize({ [name]: 'short' }, [], true)).toEqual({ [name]: '[redacted]' });
+    expect(sanitize({ [name]: 'short' })).toEqual({});
+    expect(redactText(`The ${name}: short`)).toBe(`The ${name}: [redacted]`);
+    expect(redactText(`${name}=string`)).toBe(`${name}=[redacted]`);
+    expect(redactText(`${name}: "string"`)).toBe(`${name}: "[redacted]"`);
+    expect(redactText(`${name}: "process.env.X"`)).toBe(`${name}: "[redacted]"`);
+    const code = `${name} = providerKeyFor(model)`;
+    expect(redactText(code)).toBe(code);
+  }
+});
+
+test('standalone JWT, PEM, Google, GitHub, GitLab and Slack formats redact without labels', () => {
+  const tokens = [
+    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c3ludGhldGlj',
+    'AIza' + 'x'.repeat(35),
+    ...['ghp_', 'gho_', 'ghs_', 'ghu_', 'ghr_'].map((prefix) => prefix + 'x'.repeat(36)),
+    'github_pat_' + 'x'.repeat(22),
+    'glpat-' + 'x'.repeat(20),
+    ...['xoxa-', 'xoxb-', 'xoxp-', 'xoxo-', 'xoxs-', 'xoxr-'].map(
+      (prefix) => prefix + '1234567890-fixture'
+    ),
+  ];
+  for (const token of tokens) {
+    const text = `my token ${token} ends here`;
+    expect(redactText(text)).toBe('my token [redacted] ends here');
+    expect(redactText(`my token ${token}.`)).toBe('my token [redacted].');
+    expect(redactText(redactText(text))).toBe(redactText(text));
+    expect(redactText(`/code/${token} identifier_${token}`)).toBe(
+      `/code/${token} identifier_${token}`
+    );
+  }
+  for (const label of [
+    'PRIVATE KEY',
+    'RSA PRIVATE KEY',
+    'EC PRIVATE KEY',
+    'ENCRYPTED PRIVATE KEY',
+  ]) {
+    const pem = `-----BEGIN ${label}-----\nZml4dHVyZQ==\n-----END ${label}-----`;
+    expect(redactText(`before\n${pem}\nafter`)).toBe('before\n[redacted]\nafter');
+    expect(redactText(JSON.stringify({ text: pem }))).toBe('{"text":"[redacted]"}');
+  }
+  expect(redactText('-----BEGIN PRIVATE KEY-----\nunfinished')).toBe('[redacted]');
+});
+
+test('CLI credential flags and indented YAML scalar values redact with their layout intact', () => {
+  for (const flag of ['--api-key ', '--token ', '--password ', '-p']) {
+    expect(redactText(`command ${flag}short --other keep`)).toBe(
+      `command ${flag}[redacted] --other keep`
+    );
+    expect(redactText(`${flag}"short"`)).toBe(`${flag}"[redacted]"`);
+  }
+  for (const scalar of ['', '|', '|-', '>+', '|2', '|2-', '|-2']) {
+    const text = `outer:\n  privateKey: ${scalar}\n    first-secret\n    second-secret\n  ordinary: keep`;
+    const expected = `outer:\n  privateKey: ${scalar}\n    [redacted]\n    [redacted]\n  ordinary: keep`;
+    expect(redactText(text)).toBe(expected);
+    expect(redactText(expected)).toBe(expected);
+  }
+  expect(redactText('password:\n  short\nordinary: keep')).toBe(
+    'password:\n  [redacted]\nordinary: keep'
+  );
+});
+
+test('cheap code, path and prose exclusions preserve noncredential values', () => {
+  for (const text of [
+    'primary_key=True',
+    'password: string,',
+    'apiKey: process.env.X',
+    'api_key = os.environ["FIXTURE"]',
+    'next_page_token: null',
+    'key=/usr/local/x.gpg',
+    'The secret: keep going.',
+    'The cookie: chocolate chip.',
+  ])
+    expect(redactText(text)).toBe(text);
+});
+
+test('large indexed bodies and repository URLs stay useful and safe in storage and HTTP responses', async () => {
+  const temp = mkdtempSync('/tmp/pool-review5-');
+  const root = join(temp, 'archive');
+  const snapshot = join(root, 'host/2026-10-05T120000Z');
+  const file = '.codex/sessions/session.jsonl';
+  const destination = join(temp, 'index.sqlite');
+  const credential = 'fixture-url-password-123456';
+  const remote = `https://x-access-token:${credential}@github.com/o/r.git`;
+  const large = (
+    `Useful ordinary prose. accessToken=${credential}\n` + 'ordinary prose '.repeat(80000)
+  ).slice(0, 1024 * 1024);
+  const records = [
+    {
+      type: 'session_meta',
+      payload: {
+        id: 'review5',
+        git: { repository_url: remote, remote: `https://:${credential}@github.com/o/r.git` },
+      },
+    },
+    { type: 'event_msg', payload: { type: 'user_message', message: large } },
+    { type: 'response_item', payload: { type: 'function_call_output', output: large } },
+  ];
+  let db: Database | undefined;
+  try {
+    mkdirSync(join(snapshot, '.codex/sessions'), { recursive: true });
+    writeFileSync(
+      join(snapshot, 'manifest.json'),
+      JSON.stringify({ completed_at: '2026-10-05T12:00:00Z', sources: [] })
+    );
+    const original = records.map((record) => JSON.stringify(record)).join('\n');
+    writeFileSync(join(snapshot, file), original);
+    buildIndex(root, destination, () => '');
+    db = openIndex(destination);
+    const items = db.query<ItemRow, []>('SELECT * FROM item ORDER BY seq').all();
+    for (const [i, row] of items.entries()) {
+      expect(row.body).toStartWith('Useful ordinary prose. accessToken=[redacted]\n');
+      expect(row.body.length).toBe(i === 0 ? 8192 : 2048);
+    }
+    for (const table of ['session', 'session_fts', 'item', 'item_fts', 'file_cache']) {
+      const stored = JSON.stringify(db.query(`SELECT * FROM ${table}`).all());
+      expect(stored).not.toContain(credential);
+    }
+    const route = handler(db, root, undefined, undefined, () => '');
+    for (const path of ['/api/search', '/api/search?q=Useful', '/api/search?q=github']) {
+      const response = await route(new Request(`http://synthetic.invalid${path}`));
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result).toMatchObject({ total: 1 });
+      expect(JSON.stringify(result)).toContain(
+        'https://x-access-token:[redacted]@github.com/o/r.git'
+      );
+      expect(JSON.stringify(result)).not.toContain(credential);
+    }
+    const raw = rawRecord(
+      root,
+      JSON.stringify({
+        kind: 'jsonl',
+        file: `${snapshot.slice(root.length + 1)}/${file}`,
+        offset: 0,
+        length: Buffer.byteLength(JSON.stringify(records[0])),
+      }),
+      ''
+    );
+    expect(raw).toMatchObject({
+      payload: {
+        git: {
+          repository_url: 'https://x-access-token:[redacted]@github.com/o/r.git',
+          remote: 'https://:[redacted]@github.com/o/r.git',
+        },
+      },
+    });
+    db.query('UPDATE item SET pointer=? WHERE id=?').run(
+      JSON.stringify({
+        kind: 'jsonl',
+        file: `${snapshot.slice(root.length + 1)}/${file}`,
+        offset: 0,
+        length: Buffer.byteLength(JSON.stringify(records[0])),
+      }),
+      items[0]!.id
+    );
+    const response = await route(
+      new Request(`http://synthetic.invalid/api/items/${items[0]!.id}/raw`)
+    );
+    expect(await response.json()).toEqual({ record: raw });
+    expect(
+      sanitize({ repo: remote, git: remote, remote_url: remote, repository_url: remote }, [], true)
+    ).toEqual(
+      Object.fromEntries(
+        ['repo', 'git', 'remote_url', 'repository_url'].map((name) => [
+          name,
+          'https://x-access-token:[redacted]@github.com/o/r.git',
+        ])
+      )
+    );
+    expect(readFileSync(join(snapshot, file), 'utf8')).toBe(original);
+  } finally {
+    db?.close();
     rmSync(temp, { recursive: true, force: true });
   }
 });

@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { immutable, lines } from "./archive";
-import { redactText, sanitize } from './telemetry/events';
+import { redactText, redactIndexedText, sanitize } from './telemetry/events';
 import {
   array,
   object,
@@ -51,7 +51,7 @@ export function codex(path: string, file: string, secrets: string[] = []): Parse
       s.cwd = string(p.cwd);
       s.provider = string(p.model_provider);
       s.started = timestamp(p.timestamp) || time;
-      s.repo = string(object(p.git).repository_url);
+      s.repo = redactText(string(object(p.git).repository_url), secrets);
       s.branch = string(object(p.git).branch);
       s.parentId = string(p.parent_thread_id) || string(p.forked_from_id);
       s.kind = p.parent_thread_id
@@ -73,13 +73,13 @@ export function codex(path: string, file: string, secrets: string[] = []): Parse
           number(u.input_tokens) + number(u.output_tokens);
     }
     if (o.type === "event_msg" && p.type === "user_message") {
-      const body = redactText(text(p.message), secrets);
+      const body = redactIndexedText(text(p.message), secrets);
       s.items.push(item(time, "user", body, pointer));
       canonical.add(`user:${body}`);
     }
     if (o.type === "response_item") {
       if (p.type === "message" && p.role === "assistant") {
-        const body = redactText(text(p.content), secrets);
+        const body = redactIndexedText(text(p.content), secrets);
         s.items.push(item(time, "assistant", body, pointer));
         canonical.add(`assistant:${body}`);
       } else if (p.type === "function_call" || p.type === "custom_tool_call") {
@@ -87,7 +87,7 @@ export function codex(path: string, file: string, secrets: string[] = []): Parse
           item(
             time,
             "tool_call",
-            redactText(text(p.arguments ?? p.input), secrets),
+            redactIndexedText(text(p.arguments ?? p.input), secrets),
             pointer,
             string(p.name),
             string(p.call_id),
@@ -101,7 +101,7 @@ export function codex(path: string, file: string, secrets: string[] = []): Parse
           item(
             time,
             "tool_result",
-            redactText(text(p.output), secrets),
+            redactIndexedText(text(p.output), secrets),
             pointer,
             "",
             string(p.call_id),
@@ -117,7 +117,7 @@ export function codex(path: string, file: string, secrets: string[] = []): Parse
           : completedItem.type === "AgentMessage"
             ? "assistant"
             : null;
-      const body = redactText(text(completedItem.content ?? completedItem.text), secrets);
+      const body = redactIndexedText(text(completedItem.content ?? completedItem.text), secrets);
       if (r && body)
         completed.push({
           key: `${r}:${body}`,
@@ -183,18 +183,18 @@ export function claude(path: string, file: string, secrets: string[] = []): Pars
           item(
             time,
             o.isMeta === true ? "system" : role(o.type),
-            redactText(string(b.text), secrets),
+            redactIndexedText(string(b.text), secrets),
             pointer,
           ),
         );
       else if (b.type === "thinking")
-        s.items.push(item(time, "thinking", redactText(string(b.thinking), secrets), pointer));
+        s.items.push(item(time, "thinking", redactIndexedText(string(b.thinking), secrets), pointer));
       else if (b.type === "tool_use")
         s.items.push(
           item(
             time,
             "tool_call",
-            redactText(text(b.input), secrets),
+            redactIndexedText(text(b.input), secrets),
             pointer,
             string(b.name),
             string(b.id),
@@ -205,7 +205,7 @@ export function claude(path: string, file: string, secrets: string[] = []): Pars
           item(
             time,
             "tool_result",
-            redactText(text(b.content), secrets),
+            redactIndexedText(text(b.content), secrets),
             pointer,
             "",
             string(b.tool_use_id),
@@ -234,7 +234,7 @@ export function opencode(path: string, file: string, secrets: string[] = []): Pa
       const s = session("opencode", id);
       s.title = redactText(string(r.title), secrets);
       s.cwd = string(r.directory);
-      s.repo = s.cwd;
+      s.repo = redactText(s.cwd, secrets);
       s.started = timestamp(r.time_created);
       s.updated = timestamp(r.time_updated);
       s.parentId = string(r.parent_id);
@@ -271,14 +271,14 @@ export function opencode(path: string, file: string, secrets: string[] = []): Pa
           };
           const time = timestamp(p.time_created) || timestamp(m.time_created);
           if (d.type === "text")
-            s.items.push(item(time, role(data.role), redactText(string(d.text), secrets), pointer));
+            s.items.push(item(time, role(data.role), redactIndexedText(string(d.text), secrets), pointer));
           else if (d.type === "tool") {
             const callId = string(d.callID) || string(p.id);
             s.items.push(
               item(
                 time,
                 "tool_call",
-                redactText(text(state.input), secrets),
+                redactIndexedText(text(state.input), secrets),
                 pointer,
                 string(d.tool),
                 callId,
@@ -289,7 +289,7 @@ export function opencode(path: string, file: string, secrets: string[] = []): Pa
                 item(
                   time,
                   "tool_result",
-                  redactText(text(state.output ?? state.error), secrets),
+                  redactIndexedText(text(state.output ?? state.error), secrets),
                   pointer,
                   string(d.tool),
                   callId,
@@ -360,7 +360,7 @@ export function t3(path: string, file: string, secrets: string[] = []): Parsed {
           : {};
       s.title = redactText(string(t.title), secrets);
       s.cwd = string(t.worktree_path);
-      s.repo = s.cwd;
+      s.repo = redactText(s.cwd, secrets);
       s.branch = string(t.branch);
       s.model = string(model.model);
       s.provider = string(model.instanceId);
@@ -374,7 +374,7 @@ export function t3(path: string, file: string, secrets: string[] = []): Parsed {
         .all(id)) {
         const m = object(row);
         s.items.push(
-          item(timestamp(m.created_at), role(m.role), redactText(string(m.text), secrets), {
+          item(timestamp(m.created_at), role(m.role), redactIndexedText(string(m.text), secrets), {
             kind: "sqlite",
             file,
             table: "projection_thread_messages",

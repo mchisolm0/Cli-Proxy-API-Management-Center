@@ -69,10 +69,22 @@ const REDACTED = '[redacted]';
 const REDACTION_BUDGET_MS = 25;
 const MAX_REDACTION_LENGTH = 1024 * 1024;
 
+// Normalize camelCase once per identifier, then check whole name segments.
+function credentialName(name: string): boolean {
+  return /(?:^|[_-])(?:key|token|secret|password)(?:[_-]|$)|^api[-_]?keys$|^pgpassword$/i.test(
+    name.replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+  );
+}
+
+function proseLabel(text: string, start: number): boolean {
+  return /(?:^|\s)the $/i.test(text.slice(Math.max(0, start - 5), start));
+}
+
 // Generic key/token fields also describe keyboard input and code identifiers.
 function looksLikeSecret(value: string): boolean {
   return (
     value.length >= 12 &&
+    !/^(?:\/|\.{1,2}\/|[a-z]:\\)/i.test(value) &&
     /^[a-z0-9_+./~%=-]+$/i.test(value) &&
     (/[0-9_+./~%=]/.test(value) ||
       (value.length >= 20 && /[a-z]/.test(value) && /[A-Z]/.test(value)))
@@ -120,11 +132,20 @@ function assignmentValue(text: string, start: number) {
   return { from, to: i, end: i, value: text.slice(from, i) };
 }
 
-/** Linear scans preserve formatting. Oversize/over-budget bodies fail closed as a whole. */
+/** Full raw strings fail closed when their size or time budget is exceeded. */
 export function redactText(value: string, secrets: string[] = []): string {
+  return scanText(value, secrets, performance.now() + REDACTION_BUDGET_MS);
+}
+
+/** Indexed text has bounded work, so host load cannot wipe an ordinary large body. */
+export function redactIndexedText(value: string, secrets: string[] = []): string {
+  return scanText(value.slice(0, 64 * 1024), secrets, Infinity);
+}
+
+/** Forward scans preserve formatting and never restart inside an already consumed value. */
+function scanText(value: string, secrets: string[], deadline: number): string {
   if (value.length > MAX_REDACTION_LENGTH) return REDACTED;
-  const deadline = performance.now() + REDACTION_BUDGET_MS;
-  const expired = () => performance.now() >= deadline;
+  const expired = () => deadline !== Infinity && performance.now() >= deadline;
   let text = value;
   for (const secret of secrets) {
     if (expired()) return REDACTED;
@@ -150,6 +171,7 @@ export function redactText(value: string, secrets: string[] = []): string {
   let cookieCopied = 0;
   for (let header = cookies.exec(text); header; header = cookies.exec(text)) {
     if (expired()) return REDACTED;
+    if (/^cookie/i.test(header[0]) && proseLabel(text, header.index)) continue;
     const start = cookies.lastIndex;
     const value = assignmentValue(text, start);
     if (value.from === start) {
@@ -164,13 +186,49 @@ export function redactText(value: string, secrets: string[] = []): string {
   }
   text = cookieParts.join('') + text.slice(cookieCopied);
   // URL delimiters are fixed; username/password runs cannot cross another URL's slashes.
-  text = text.replace(/(:\/\/[^\s/:@]+:)[^\s/@]+@/g, '$1[redacted]@');
+  text = text.replace(/(:\/\/[^\s/:@]*:)[^\s/@]+@/g, '$1[redacted]@');
   // Run standalone tokens before assignment scanning so an ordinary quoted
   // key/token value containing a pasted credential cannot hide it.
   text = text.replace(
-    /(?<![\w/])(?:sk-ant-[a-z0-9_-]{20,}|sk-(?!ant-)[a-z0-9_-]{20,}|ghp_[a-z0-9]{36,}|github_pat_[a-z0-9_]{22,})/gi,
+    /(?<![\w/])(?:sk-ant-[a-z0-9_-]{20,}|sk-(?!ant-)[a-z0-9_-]{20,}|gh[pousr]_[a-z0-9]{36,}|github_pat_[a-z0-9_]{22,}|AIza[a-z0-9_-]{35}|glpat-[a-z0-9_-]{20,}|xox[abposr]-[a-z0-9_-]{10,})/gi,
     REDACTED
   );
+  // Consume each candidate once, so repeated eyJ prefixes cannot restart a failed JWT scan.
+  text = text.replace(/[a-z0-9_.-]+/gi, (token, start: number) => {
+    if (!/^eyJ/i.test(token) || /[\w/]/.test(text[start - 1] || '')) return token;
+    let end = token.length;
+    while (token[end - 1] === '.') end--;
+    return /^eyJ[a-z0-9_-]*\.[a-z0-9_-]+\.[a-z0-9_-]+$/i.test(token.slice(0, end))
+      ? REDACTED + token.slice(end)
+      : token;
+  });
+  if (expired()) return REDACTED;
+  const pem = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----/g;
+  const pemParts: string[] = [];
+  let pemCopied = 0;
+  for (let begin = pem.exec(text); begin; begin = pem.exec(text)) {
+    if (expired()) return REDACTED;
+    const closing = `-----END ${begin[1]}-----`;
+    const end = text.indexOf(closing, pem.lastIndex);
+    // A prefix can end inside a key. Consume the rest if the end marker is missing.
+    pem.lastIndex = end < 0 ? text.length : end + closing.length;
+    pemParts.push(text.slice(pemCopied, begin.index), REDACTED);
+    pemCopied = pem.lastIndex;
+  }
+  text = pemParts.join('') + text.slice(pemCopied);
+
+  const flags = /(?:^|[ \t])(?:--(?:api-key|token|password)[ \t]+|-p(?=[^\s`,;&<>()[\]{}]))/gi;
+  const flagParts: string[] = [];
+  let flagCopied = 0;
+  for (let flag = flags.exec(text); flag; flag = flags.exec(text)) {
+    if (expired()) return REDACTED;
+    const value = assignmentValue(text, flags.lastIndex);
+    flags.lastIndex = value.end;
+    if (!value.value || value.value === REDACTED) continue;
+    flagParts.push(text.slice(flagCopied, value.from), REDACTED);
+    flagCopied = value.to;
+  }
+  text = flagParts.join('') + text.slice(flagCopied);
   if (expired()) return REDACTED;
   text = text.replace(/\bapi-keys:[ \t]*(?:\r?\n[ \t]+-[^\r\n]*)+/gi, (list) =>
     list.replace(/^([ \t]*-[ \t]+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s#]+)/gm, '$1[redacted]')
@@ -202,17 +260,56 @@ export function redactText(value: string, secrets: string[] = []): string {
     if (expired()) return REDACTED;
     const name = match[0];
     if (name === REDACTED) continue;
-    if (
-      !/(?:^|[_-])(?:key|token|secret|password|api[-_]?key|client[-_]?secret)$|^(?:apiKey|PGPASSWORD)$/i.test(
-        name
-      )
-    )
+    if (!credentialName(name) || (/^secret$/i.test(name) && proseLabel(text, match.index)))
       continue;
     separator.lastIndex = identifiers.lastIndex;
-    if (!separator.exec(text)) continue;
+    const delimiter = separator.exec(text);
+    if (!delimiter) continue;
     const value = assignmentValue(text, separator.lastIndex);
+    if (
+      delimiter[0].includes(':') &&
+      (!value.value || /^[|>](?:[+-][1-9]?|[1-9][+-]?)?$/.test(value.value))
+    ) {
+      // YAML scalars occupy more-indented lines. Advance through the block once,
+      // leaving its line breaks and the following sibling fields intact.
+      const lineStart = text.lastIndexOf('\n', match.index - 1) + 1;
+      const indentation = text.slice(lineStart, match.index);
+      if (/^[ \t]*$/.test(indentation)) {
+        let end = text.indexOf('\n', value.end);
+        const from = end < 0 ? text.length : end + 1;
+        end = from;
+        while (end < text.length) {
+          if (expired()) return REDACTED;
+          const newline = text.indexOf('\n', end);
+          const next = newline < 0 ? text.length : newline + 1;
+          let content = end;
+          while (text[content] === ' ' || text[content] === '\t') content++;
+          const blank = content >= next || text[content] === '\r' || text[content] === '\n';
+          if (!blank && content - end <= indentation.length) break;
+          end = next;
+        }
+        if (end > from) {
+          parts.push(
+            text.slice(copied, from),
+            text.slice(from, end).replace(/^([ \t]*)\S[^\r\n]*/gm, '$1[redacted]')
+          );
+          copied = identifiers.lastIndex = end;
+          continue;
+        }
+      }
+    }
     identifiers.lastIndex = value.end;
     if (!value.value || value.value === REDACTED || text[value.end] === '(') continue;
+    const quoted = value.from > separator.lastIndex;
+    if (
+      !quoted &&
+      (/^(?:true|false|null|undefined)$/i.test(value.value) ||
+        (delimiter[0].includes(':') &&
+          /^(?:string|number|boolean|unknown|never|any)$/i.test(value.value) &&
+          /[,;|?}]/.test(text[value.end] || '')) ||
+        /^(?:process\.env|(?:os\.)?environ)(?:\.|$)/.test(value.value))
+    )
+      continue;
     if (/^(key|token)$/i.test(name) && !looksLikeSecret(value.value)) continue;
     parts.push(text.slice(copied, value.from), REDACTED);
     copied = value.to;
@@ -231,9 +328,7 @@ export function sanitize(value: unknown, secrets: string[] = [], preserveKeys = 
       if (
         preserveKeys &&
         typeof v === 'string' &&
-        /^(pointer|file|path|cwd|repo|branch|git_branch|gitBranch|git|directory|worktree_path|repository_url)$/i.test(
-          key
-        )
+        /^(pointer|file|path|cwd|branch|git_branch|gitBranch|directory|worktree_path)$/i.test(key)
       )
         return [[key, v]];
       if (
@@ -242,11 +337,7 @@ export function sanitize(value: unknown, secrets: string[] = [], preserveKeys = 
         (typeof v !== 'string' || !looksLikeSecret(v))
       )
         return [[key, sanitize(v, secrets, preserveKeys)]];
-      if (
-        /^(key|token|api[-_]?keys?|user_api_key|client[_-]?secret|authorization|x-api-key|x-goog-api-key|x-management-key|management_key|access_token|refresh_token|id_token|password|pgpassword|secret|cookie|set-cookie)$/i.test(
-          key
-        )
-      )
+      if (credentialName(key) || /^(authorization|cookie|set-cookie)$/i.test(key))
         return preserveKeys ? [[key, '[redacted]']] : [];
       return [[key, sanitize(v, secrets, preserveKeys)]];
     })

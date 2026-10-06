@@ -11,7 +11,7 @@ export const archiveRoot = () =>
 export const indexPath = () =>
   resolve(process.env.INDEX_PATH || "./data/index.sqlite");
 type Cache = { parsed: Parsed; metadata: Record<string, unknown>[] };
-const CACHE_PREFIX = 'r3:';
+const CACHE_PREFIX = 'r4:';
 
 export function buildIndex(
   root: string,
