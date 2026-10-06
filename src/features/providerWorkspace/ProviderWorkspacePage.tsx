@@ -24,74 +24,45 @@ import { usePool } from './PoolContext';
 import {
   credentialId,
   credentialLabel,
-  providerPath,
   providerTraffic,
+  workspaceChannel,
   workspaceProviders,
 } from './model';
-import { quotaIsCurrent, type QuotaWindow } from './quotaSignals';
+import { headlineQuota, windowLabel, type QuotaWindow } from './quotaSignals';
+import { QuotaBar } from './QuotaBar';
+import { ProviderTable } from './ProviderTable';
+import { providerPaused, providerStatus } from './status';
+import { SessionRows } from '@/features/shell/SessionRows';
+import { formatCount, formatSeconds } from '@/features/shell/format';
 import { ProblemRows } from './ProblemRows';
 import { OAuthDialog } from './OAuthDialog';
 import { confirmAccountLogin, confirmPoolChange } from './actions';
 import styles from './Workspace.module.scss';
 
+/** Headline 5 hour / weekly bars; per-model windows stay one click away. */
 function QuotaMeters({ windows, now }: { windows: QuotaWindow[]; now: number }) {
   const { t } = useTranslation();
+  const headline = headlineQuota(windows, now);
+  const perModel = windows.filter((window) => window.model);
+  if (!windows.length) return <p className={styles.muted}>{t('shell.quota_unknown')}</p>;
   return (
     <div className={styles.meters}>
-      {windows.map((window, index) => {
-        const current = quotaIsCurrent(window, now);
-        const label =
-          window.periodHours === 5
-            ? t('shell.five_hour')
-            : window.periodHours === 168
-              ? t('shell.weekly')
-              : window.label === 'primary' || window.label === 'secondary'
-                ? t(`shell.${window.label}`)
-                : window.label;
-        const percent = window.usedPercent;
-        return (
-          <div
-            className={styles.meter}
-            key={`${window.id}:${index}`}
-            data-stale={!current}
-            data-level={
-              window.rejected || (percent ?? 0) >= 90
-                ? 'high'
-                : (percent ?? 0) >= 70
-                  ? 'medium'
-                  : 'low'
-            }
-          >
-            <span>{window.model ? `${window.model} · ${label}` : label}</span>
-            {percent === null ? (
-              <span className={styles.unknownMeter} aria-hidden />
-            ) : (
-              <meter
-                min={0}
-                max={100}
-                low={70}
-                high={90}
-                optimum={0}
-                value={Math.min(100, percent)}
-                aria-label={label}
-              />
-            )}
-            <strong>
-              {window.rejected
-                ? t('shell.exhausted')
-                : percent === null
-                  ? t('shell.unknown')
-                  : `${Math.round(percent)}%`}
-            </strong>
-            <span>
-              {window.resetAtMs
-                ? t('shell.resets_at', { time: new Date(window.resetAtMs).toLocaleString() })
-                : t('shell.reset_unknown')}
-              {!current && ` · ${t('shell.stale')}`}
-            </span>
-          </div>
-        );
-      })}
+      {headline.map((window) => (
+        <QuotaBar key={window.id} window={window} now={now} />
+      ))}
+      {perModel.length > 0 && (
+        <details className={styles.perModel}>
+          <summary>{t('shell.per_model', { count: perModel.length })}</summary>
+          {perModel.map((window, index) => (
+            <QuotaBar
+              key={`${window.id}:${index}`}
+              window={window}
+              now={now}
+              label={`${window.model} · ${windowLabel(t, window, true)}`}
+            />
+          ))}
+        </details>
+      )}
     </div>
   );
 }
@@ -103,26 +74,16 @@ export function ProvidersPage() {
     <div className={styles.page}>
       <header className={styles.header}>
         <h1>{t('shell.providers')}</h1>
-        <Link className={styles.action} to="/ai-providers">
-          {t('shell.add_provider')}
-        </Link>
+        <div className={styles.actions}>
+          <Link className={styles.quiet} to="/auth-files">
+            {t('shell.upload_account')}
+          </Link>
+          <Link className={styles.action} to="/ai-providers">
+            {t('shell.add_provider')}
+          </Link>
+        </div>
       </header>
-      {pool.providers.map((provider) => (
-        <Link className={styles.providerRow} key={provider.id} to={providerPath(provider.id)}>
-          <strong>{provider.name}</strong>
-          <span>
-            {t(provider.oauth ? 'shell.account_count' : 'shell.key_count', {
-              count: provider.oauth
-                ? provider.files.length
-                : provider.resources.reduce(
-                    (sum, resource) => sum + Math.max(1, resource.apiKeyEntryCount),
-                    0
-                  ),
-            })}
-          </span>
-          <span>{t('shell.open_provider')}</span>
-        </Link>
-      ))}
+      <ProviderTable known={!pool.loading && !pool.errors.includes('credentials')} />
     </div>
   );
 }
@@ -203,9 +164,22 @@ function Workspace({ id }: { id: string }) {
     );
   const traffic = providerTraffic(provider, pool.health?.providers ?? []);
   const problems = pool.attention.filter((item) => item.provider === provider.id);
-  const paused = provider.oauth
-    ? provider.files.length > 0 && provider.files.every((file) => file.disabled)
-    : provider.resources.every((resource) => resource.disabled);
+  const paused = providerPaused(provider);
+  const status = providerStatus(
+    provider,
+    pool.attention,
+    !pool.loading && !pool.errors.includes('credentials')
+  );
+  const exposed = new Set(
+    provider.oauth ? models : provider.resources.flatMap((resource) => resource.models)
+  );
+  const recent = (pool.recent?.sessions ?? [])
+    .filter(
+      (session) =>
+        (session.provider && workspaceChannel(session.provider) === provider.channel) ||
+        exposed.has(session.model)
+    )
+    .slice(0, 5);
   const loginSupported =
     provider.oauth &&
     ['codex', 'claude', 'antigravity', 'kimi', 'xai', 'devin', 'meta'].includes(provider.channel);
@@ -256,29 +230,18 @@ function Workspace({ id }: { id: string }) {
       <header className={styles.header}>
         <div>
           <h1>
-            <span
-              className={styles.dot}
-              data-status={
-                paused
-                  ? 'unknown'
-                  : problems.length
-                    ? 'warning'
-                    : pool.loading || pool.errors.length
-                      ? 'unknown'
-                      : 'ok'
-              }
-            />
+            <span className={styles.dot} data-status={status} />
             {provider.name}
           </h1>
           <span>
             {t(
-              paused
-                ? 'shell.paused'
-                : problems.length
-                  ? 'shell.needs_review'
-                  : pool.loading || pool.errors.length
-                    ? 'shell.health_unknown'
-                    : 'shell.active'
+              {
+                paused: 'shell.paused',
+                error: 'shell.needs_review',
+                warning: 'shell.quota_low',
+                ok: 'shell.active',
+                unknown: 'shell.health_unknown',
+              }[status]
             )}
           </span>
         </div>
@@ -330,46 +293,36 @@ function Workspace({ id }: { id: string }) {
           })}
         </p>
       )}
-      <div className={styles.stats}>
-        <div>
-          <strong>{traffic?.requests.toLocaleString() ?? t('shell.unknown')}</strong>
-          <span>{t('shell.requests_24h')}</span>
-        </div>
-        <div>
-          <strong>
-            {traffic
-              ? `${traffic.requests ? Math.round((traffic.failures / traffic.requests) * 100) : 0}%`
-              : t('shell.unknown')}
-          </strong>
-          <span>{t('shell.failed')}</span>
-        </div>
-        <div>
-          <strong>
-            {traffic?.p50 != null ? `${(traffic.p50 / 1000).toFixed(1)} s` : t('shell.unknown')}
-          </strong>
-          <span>{t('shell.p50_latency')}</span>
-        </div>
-        <Link
-          to={
-            provider.resources[0]?.models[0]
-              ? `/sessions?model=${encodeURIComponent(provider.resources[0].models[0])}`
-              : '/sessions'
-          }
-        >
-          {t('shell.sessions')}
-        </Link>
+      <div className={styles.overviewStats}>
+        {(
+          [
+            [traffic ? formatCount(traffic.requests) : '?', t('shell.requests_24h')],
+            [
+              traffic
+                ? `${traffic.requests ? Math.round((traffic.failures / traffic.requests) * 100) : 0}%`
+                : '?',
+              t('shell.failed'),
+            ],
+            [formatSeconds(traffic?.p50 ?? null) ?? '?', t('shell.p50_latency')],
+            [formatSeconds(traffic?.ttft ?? null) ?? '?', t('shell.first_token')],
+            [traffic ? formatCount(traffic.tokens) : '?', t('shell.tokens')],
+          ] as const
+        ).map(([value, label]) => (
+          <div key={label}>
+            <strong>{value}</strong>
+            <span>{label}</span>
+          </div>
+        ))}
       </div>
-      {!provider.oauth && (
+      {problems.length > 0 && (
+        <section className={styles.section}>
+          <ProblemRows items={problems} onLogin={setLogin} showProvider={false} />
+        </section>
+      )}
+      {!provider.oauth && pool.quotaForProvider(provider).length > 0 && (
         <section className={styles.section}>
           <h2>{t('shell.quota')}</h2>
           <QuotaMeters windows={pool.quotaForProvider(provider)} now={pool.now} />
-          {!pool.quotaForProvider(provider).length && <p>{t('shell.quota_unknown')}</p>}
-        </section>
-      )}
-      {problems.length > 0 && (
-        <section className={styles.section}>
-          <h2>{t('shell.problems')}</h2>
-          <ProblemRows items={problems} onLogin={setLogin} />
         </section>
       )}
       <section className={styles.section}>
@@ -439,7 +392,6 @@ function Workspace({ id }: { id: string }) {
                 </div>
               </div>
               <QuotaMeters windows={windows} now={pool.now} />
-              {!windows.length && <span>{t('shell.quota_unknown')}</span>}
               {cooldown?.rows
                 .filter((row) => row.remainingSeconds > 0)
                 .map((row, index) => (
@@ -449,14 +401,14 @@ function Workspace({ id }: { id: string }) {
                   </p>
                 ))}
               {['codex', 'claude'].includes(provider.channel) && (
-                <Button
-                  size="sm"
-                  variant="ghost"
+                <button
+                  type="button"
+                  className={styles.quiet}
                   disabled={pool.busy || file.disabled}
                   onClick={() => void refreshQuota(file)}
                 >
                   {t('shell.refresh_quota')}
-                </Button>
+                </button>
               )}
             </div>
           );
@@ -664,6 +616,17 @@ function Workspace({ id }: { id: string }) {
           </div>
         </div>
       </section>
+      {recent.length > 0 && (
+        <section className={styles.section}>
+          <div className={styles.sectionHead}>
+            <h2>{t('shell.recent_sessions')}</h2>
+            <Link className={styles.quiet} to="/sessions">
+              {t('shell.all_sessions')}
+            </Link>
+          </div>
+          <SessionRows sessions={recent} now={pool.now} />
+        </section>
+      )}
       {details && (
         <Modal open title={credentialLabel(details)} onClose={() => setDetails(null)}>
           <dl className={styles.details}>

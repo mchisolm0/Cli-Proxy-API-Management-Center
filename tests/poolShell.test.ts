@@ -4,6 +4,7 @@ import {
   quotaIsCurrent,
   tightestQuota,
   parseCredentialQuota,
+  headlineQuota,
 } from '../src/features/providerWorkspace/quotaSignals';
 import { deriveAttention } from '../src/features/home/attention';
 import {
@@ -238,6 +239,69 @@ describe('home attention', () => {
   });
 });
 
+describe('overview alerts', () => {
+  const codexWindow = (percent: string) => ({
+    signals: {
+      'X-Codex-Secondary-Used-Percent': percent,
+      'X-Codex-Secondary-Window-Minutes': '10080',
+      'X-Codex-Secondary-Reset-At': String((now + 86_400_000 * 3) / 1000),
+    },
+  });
+  test('client cancels and unclassified errors never raise an alert', () => {
+    const attention = deriveAttention(
+      [],
+      [
+        problem({ key: 'cancel', provider: 'claude', category: 'client', code: '499' }),
+        problem({ key: 'odd', provider: 'claude', category: 'other', code: 'x' }),
+      ],
+      [
+        {
+          provider: 'claude',
+          failures: 1,
+          errorCounts: { auth: 0, quota: 0, upstream: 0, transport: 0, client: 1, other: 0 },
+        } as unknown as ProviderHealth,
+      ],
+      now
+    );
+    expect(attention).toEqual([]);
+  });
+  test('a window at 85% warns early, after anything that is actually broken', () => {
+    const attention = deriveAttention(
+      [
+        { name: 'busy.json', type: 'codex', quota: codexWindow('89') },
+        { name: 'calm.json', type: 'codex', quota: codexWindow('40') },
+        { name: 'broken.json', type: 'claude', status: 'error', statusMessage: '401' },
+      ],
+      [],
+      [],
+      now
+    );
+    expect(attention.map((item) => [item.file?.name, item.reason])).toEqual([
+      ['broken.json', 'auth'],
+      ['busy.json', 'quota_high'],
+    ]);
+    expect(attention[1].window).toMatchObject({ usedPercent: 89, periodHours: 168 });
+  });
+  test('per-model windows roll up to the fullest current window per period', () => {
+    const windows = parseCredentialQuota('codex', null, {
+      a: codexWindow('81'),
+      b: codexWindow('89'),
+      c: {
+        signals: {
+          'X-Codex-Primary-Used-Percent': '15',
+          'X-Codex-Primary-Window-Minutes': '300',
+        },
+      },
+    });
+    expect(
+      headlineQuota(windows, now).map((window) => [window.periodHours, window.usedPercent])
+    ).toEqual([
+      [5, 15],
+      [168, 89],
+    ]);
+  });
+});
+
 describe('palette matching and scalar edits', () => {
   test('only explicit inline settings are editable, including when critical scalars exist', () => {
     const settings = scalarSettingsFromConfig(
@@ -315,6 +379,28 @@ describe('provider identity', () => {
     expect(
       credentialLabel({ name: 'secret', runtimeOnly: true, authIndex: '12', account: 'secret' })
     ).not.toContain('secret');
+  });
+  test('provider blocks pointing at one endpoint show as one provider', () => {
+    const providers = workspaceProviders(
+      {
+        metaApiKeys: [
+          { apiKey: 'fixture-1', baseUrl: 'https://opencode.ai/zen/go/v1' },
+          { apiKey: 'fixture-2', baseUrl: 'https://opencode.ai/zen/go/v1/' },
+        ],
+        openaiCompatibility: [
+          { name: 'opencode-go', baseUrl: 'https://opencode.ai/zen/go/v1', apiKeyEntries: [] },
+        ],
+      },
+      []
+    );
+    const merged = providers.filter((provider) => !provider.oauth);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      id: 'openai:opencode-go',
+      name: 'OpenCode Go',
+      brand: 'openaiCompatibility',
+    });
+    expect(merged[0].resources).toHaveLength(3);
   });
   test('matches API traffic by auth index without borrowing OAuth totals', () => {
     const providers = workspaceProviders(

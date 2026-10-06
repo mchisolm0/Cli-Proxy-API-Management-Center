@@ -2,22 +2,27 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import type { Attention } from '@/features/home/attention';
+import { formatReset } from '@/features/shell/format';
 import { usePool } from './PoolContext';
 import { credentialLabel, providerPath } from './model';
+import { windowLabel } from './quotaSignals';
 import styles from './Workspace.module.scss';
 import { confirmAccountLogin, confirmPoolChange } from './actions';
 
+/** One line per alert: what happened, then the action that fixes it. */
 export function ProblemRows({
   items,
   onLogin,
+  showProvider = true,
 }: {
   items: Attention[];
   onLogin: (provider: string) => void;
+  showProvider?: boolean;
 }) {
   const { t } = useTranslation();
   const pool = usePool();
   return (
-    <div className={styles.problemList}>
+    <div className={styles.alerts}>
       {items.map((item) => {
         const provider = pool.providers.find(
           (entry) => entry.id === item.provider || entry.channel === item.provider
@@ -28,29 +33,31 @@ export function ProblemRows({
           ['codex', 'claude', 'antigravity', 'kimi', 'xai', 'devin', 'meta'].includes(
             provider.channel
           );
-        const alias =
-          item.category === 'client' &&
-          /model|alias|not_found|404/i.test(`${item.problem?.code} ${item.problem?.fix}`);
-        const destination =
-          alias && provider?.oauth
-            ? `/auth-files/oauth-model-alias?provider=${encodeURIComponent(provider.channel)}`
-            : provider
-              ? `${providerPath(provider.id)}${alias ? '?edit=models' : ''}`
-              : '/config';
+        const account =
+          item.file && provider && provider.files.length > 1 ? credentialLabel(item.file) : '';
+        const session = item.problem?.sessions[0];
         return (
-          <div key={item.id} className={styles.problem} data-category={item.category}>
-            <div>
-              <strong>{item.file ? credentialLabel(item.file) : name}</strong>
-              <p>
-                {t(`shell.attention_${item.reason}`, {
-                  provider: name,
-                  count: item.count ?? 0,
-                  model: item.problem?.model || '',
-                  code: item.problem?.code || '',
-                })}
-              </p>
-              <span className={styles.failureClass}>{t(`shell.class_${item.category}`)}</span>
-            </div>
+          <div key={item.id} className={styles.alert} data-category={item.category}>
+            <p>
+              {showProvider && <strong>{name}</strong>}
+              {account && <span className={styles.alertAccount}>{account}</span>}
+              <span>
+                {item.reason === 'quota_high' && item.window
+                  ? t('shell.attention_quota_high', {
+                      window: windowLabel(t, item.window).toLowerCase(),
+                      percent: Math.round(item.window.usedPercent ?? 0),
+                      when: item.window.resetAtMs
+                        ? formatReset(item.window.resetAtMs, pool.now)
+                        : t('shell.reset_unknown').toLowerCase(),
+                    })
+                  : t(`shell.attention_${item.reason}`, {
+                      provider: name,
+                      count: item.count ?? 0,
+                      model: item.problem?.model || t('shell.unknown').toLowerCase(),
+                      code: item.problem?.code || '',
+                    })}
+              </span>
+            </p>
             <div className={styles.actions}>
               {item.category === 'auth' && login && !item.file?.runtimeOnly ? (
                 <Button
@@ -64,33 +71,36 @@ export function ProblemRows({
                   {t('shell.relogin')}
                 </Button>
               ) : (
-                <Link className={styles.action} to={destination}>
-                  {t(alias ? 'shell.add_alias' : 'shell.open_provider')}
-                </Link>
+                showProvider &&
+                provider && (
+                  <Link className={styles.action} to={providerPath(provider.id)}>
+                    {t('shell.open_provider_named', { name })}
+                  </Link>
+                )
               )}
-              {item.file && !item.file.disabled && !item.file.runtimeOnly && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={pool.busy}
-                  onClick={() =>
-                    confirmPoolChange('disable', credentialLabel(item.file!), () =>
-                      pool.run(() => pool.setCredential(item.file!, true))
-                    )
-                  }
-                >
-                  {t('shell.disable')}
-                </Button>
-              )}
+              {item.file &&
+                item.reason !== 'quota_high' &&
+                !item.file.disabled &&
+                !item.file.runtimeOnly && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={pool.busy}
+                    onClick={() =>
+                      confirmPoolChange('disable', credentialLabel(item.file!), () =>
+                        pool.run(() => pool.setCredential(item.file!, true))
+                      )
+                    }
+                  >
+                    {t('shell.disable')}
+                  </Button>
+                )}
               {item.problem && (
                 <Link
-                  to={
-                    item.problem.sessions[0]
-                      ? `/sessions?id=${item.problem.sessions[0].id}`
-                      : '/problems'
-                  }
+                  className={styles.quiet}
+                  to={session ? `/sessions?id=${session.id}` : '/problems'}
                 >
-                  {t('shell.sessions')}
+                  {t(session ? 'shell.example_session' : 'shell.details')}
                 </Link>
               )}
             </div>

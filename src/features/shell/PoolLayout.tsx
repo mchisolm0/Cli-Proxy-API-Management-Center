@@ -13,7 +13,9 @@ import {
 } from '@/features/plugins/pluginResources';
 import { PoolProvider, usePool } from '@/features/providerWorkspace/PoolContext';
 import { providerPath } from '@/features/providerWorkspace/model';
-import { tightestQuota } from '@/features/providerWorkspace/quotaSignals';
+import { headlineQuota } from '@/features/providerWorkspace/quotaSignals';
+import { providerStatus } from '@/features/providerWorkspace/status';
+import { QuotaBar } from '@/features/providerWorkspace/QuotaBar';
 import { CommandPalette } from '@/features/palette/CommandPalette';
 import { OAuthDialog } from '@/features/providerWorkspace/OAuthDialog';
 import styles from './Shell.module.scss';
@@ -79,12 +81,16 @@ function Shell() {
       window.removeEventListener(PLUGIN_RESOURCES_REFRESH_EVENT, load);
     };
   }, [supportsPlugin]);
-  const nav = (path: string, label: string) => (
+  const known = !pool.loading && !pool.errors.includes('credentials');
+  /** `also` keeps a section highlighted across its sibling routes (Settings tabs). */
+  const nav = (path: string, label: string, also: string[] = []) => (
     <NavLink
       key={path}
       to={path}
       end={path === '/'}
-      className={({ isActive }) => (isActive ? styles.active : '')}
+      className={({ isActive }) =>
+        isActive || also.some((prefix) => location.pathname.startsWith(prefix)) ? styles.active : ''
+      }
     >
       {label}
     </NavLink>
@@ -139,69 +145,38 @@ function Shell() {
       )}
       <aside className={`${styles.sidebar} ${mobileOpen ? styles.open : ''}`} id="pool-navigation">
         <nav aria-label={t('shell.navigation')}>
-          {nav('/', t('shell.home'))}
+          {nav('/', t('shell.overview'))}
           {nav('/providers', t('shell.providers'))}
           <div className={styles.providers}>
             {pool.providers.map((provider) => {
-              const quota = tightestQuota(pool.quotaForProvider(provider), pool.now);
-              const attention = pool.attention.some((item) => item.provider === provider.id);
-              const paused = provider.oauth
-                ? provider.files.length > 0 && provider.files.every((file) => file.disabled)
-                : provider.resources.every((resource) => resource.disabled);
+              const windows = headlineQuota(pool.quotaForProvider(provider), pool.now);
+              const status = providerStatus(provider, pool.attention, known);
               return (
                 <NavLink
                   key={provider.id}
                   to={providerPath(provider.id)}
                   className={({ isActive }) => (isActive ? styles.active : '')}
                 >
-                  <span
-                    className={styles.dot}
-                    data-status={
-                      paused || pool.loading || pool.errors.length
-                        ? 'unknown'
-                        : attention
-                          ? 'warning'
-                          : 'ok'
-                    }
-                    aria-label={t(
-                      paused
-                        ? 'shell.paused'
-                        : attention
-                          ? 'shell.needs_review'
-                          : pool.errors.length
-                            ? 'shell.unknown'
-                            : 'shell.active'
+                  <span className={styles.providerHead}>
+                    <span
+                      className={styles.dot}
+                      data-status={status}
+                      aria-label={t(`shell.status_${status}`)}
+                    />
+                    <span>{provider.name}</span>
+                    {provider.oauth && provider.files.length > 1 && (
+                      <small>{provider.files.length}</small>
                     )}
-                  />
-                  <span>{provider.name}</span>
-                  <small>
-                    {quota ? `${Math.round(quota.usedPercent ?? 0)}%` : t('shell.unknown')}
-                  </small>
+                  </span>
+                  {windows.slice(0, 2).map((window) => (
+                    <QuotaBar key={window.id} window={window} now={pool.now} compact />
+                  ))}
                 </NavLink>
               );
             })}
           </div>
           {nav('/sessions', t('shell.sessions'))}
-          {nav('/problems', t('shell.problems'))}
-          <div className={styles.divider} />
-          {nav('/config', t('shell.settings'))}
-          {nav('/logs', t('shell.logs'))}
-          {nav('/system', t('shell.system'))}
-          <details className={styles.advanced}>
-            <summary>{t('shell.advanced')}</summary>
-            {nav('/dashboard', t('nav.dashboard'))}
-            {nav('/auth-files', t('nav.auth_files'))}
-            {nav('/oauth', t('nav.oauth'))}
-            {nav('/quota', t('nav.quota'))}
-            {nav('/ai-providers', t('nav.ai_providers'))}
-            {nav('/quick-start', t('nav.quick_start'))}
-            {supportsPlugin && (
-              <>
-                {nav('/plugins', t('nav.plugins'))}
-                {nav('/plugin-store', t('nav.plugin_store'))}
-              </>
-            )}
-          </details>
+          {nav('/config', t('shell.settings'), ['/config', '/logs', '/system', '/settings'])}
           {supportsPlugin && plugins.map((plugin) => nav(plugin.route, plugin.label))}
         </nav>
         <div className={styles.version}>{version || t('shell.proxy')}</div>

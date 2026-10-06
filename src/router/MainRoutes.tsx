@@ -14,9 +14,13 @@ import { LogsPage } from '@/features/logs/LogsPage';
 import { SystemPage } from '@/pages/SystemPage';
 import { useAuthStore } from '@/stores';
 import { HomePage } from '@/features/home/HomePage';
-import { ProviderWorkspacePage, ProvidersPage } from '@/features/providerWorkspace/ProviderWorkspacePage';
+import {
+  ProviderWorkspacePage,
+  ProvidersPage,
+} from '@/features/providerWorkspace/ProviderWorkspacePage';
 import { SessionsPage } from '@/features/sessions/SessionsPage';
 import { ProblemsPage } from '@/features/problems/ProblemsPage';
+import { AdvancedPage, SettingsFrame } from '@/features/settings/SettingsFrame';
 
 const createMainRoutes = (supportsPlugin: boolean) => [
   { path: '/', element: <HomePage /> },
@@ -26,6 +30,14 @@ const createMainRoutes = (supportsPlugin: boolean) => [
   { path: '/problems', element: <ProblemsPage /> },
   { path: '/dashboard', element: <DashboardPage /> },
   { path: '/settings', element: <Navigate to="/config" replace /> },
+  {
+    path: '/settings/advanced',
+    element: (
+      <SettingsFrame>
+        <AdvancedPage />
+      </SettingsFrame>
+    ),
+  },
   { path: '/api-keys', element: <Navigate to="/config" replace /> },
   { path: '/quick-start', element: <ProvidersWorkbenchPage fixedBrand="apikeyFun" /> },
   { path: '/quick-start/*', element: <Navigate to="/quick-start" replace /> },
@@ -48,9 +60,30 @@ const createMainRoutes = (supportsPlugin: boolean) => [
         { path: '/plugins/*', element: <Navigate to="/" replace /> },
         { path: '/plugin-store', element: <Navigate to="/" replace /> },
       ]),
-  { path: '/config', element: <ConfigPage /> },
-  { path: '/logs', element: <LogsPage /> },
-  { path: '/system', element: <SystemPage /> },
+  {
+    path: '/config',
+    element: (
+      <SettingsFrame>
+        <ConfigPage />
+      </SettingsFrame>
+    ),
+  },
+  {
+    path: '/logs',
+    element: (
+      <SettingsFrame>
+        <LogsPage />
+      </SettingsFrame>
+    ),
+  },
+  {
+    path: '/system',
+    element: (
+      <SettingsFrame>
+        <SystemPage />
+      </SettingsFrame>
+    ),
+  },
   { path: '*', element: <Navigate to="/" replace /> },
 ];
 

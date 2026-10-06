@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import { isRecord } from '@/utils/helpers';
 import { resolveResetMs } from '@/utils/quota/resetInstants';
 
@@ -104,3 +105,36 @@ export function tightestQuota(windows: QuotaWindow[], now: number): QuotaWindow 
     .filter((window) => quotaIsCurrent(window, now) && window.usedPercent !== null)
     .sort((a, b) => (b.usedPercent ?? 0) - (a.usedPercent ?? 0))[0];
 }
+
+const pressure = (window: QuotaWindow) => (window.rejected ? Infinity : (window.usedPercent ?? -1));
+
+/** The fullest current window per period, so per-model limits roll up into 5 hour / weekly. */
+export function headlineQuota(windows: QuotaWindow[], now: number): QuotaWindow[] {
+  const byPeriod = new Map<string, QuotaWindow>();
+  for (const window of windows) {
+    if (!quotaIsCurrent(window, now)) continue;
+    const key = window.periodHours === null ? window.label : String(window.periodHours);
+    const previous = byPeriod.get(key);
+    if (!previous || pressure(window) > pressure(previous)) byPeriod.set(key, window);
+  }
+  return [...byPeriod.values()].sort(
+    (a, b) => (a.periodHours ?? Infinity) - (b.periodHours ?? Infinity)
+  );
+}
+
+/** Warn before a window runs out, while there is still time to switch accounts. */
+export const QUOTA_WARNING_PERCENT = 85;
+
+export function windowLabel(t: TFunction, window: QuotaWindow, short = false): string {
+  if (window.periodHours === 5) return t(short ? 'shell.five_hour_short' : 'shell.five_hour');
+  if (window.periodHours === 168) return t(short ? 'shell.weekly_short' : 'shell.weekly');
+  if (window.label === 'primary' || window.label === 'secondary') return t(`shell.${window.label}`);
+  return window.label;
+}
+
+export const quotaLevel = (window: QuotaWindow) =>
+  window.rejected || (window.usedPercent ?? 0) >= 100
+    ? 'full'
+    : (window.usedPercent ?? 0) >= QUOTA_WARNING_PERCENT
+      ? 'warn'
+      : 'ok';

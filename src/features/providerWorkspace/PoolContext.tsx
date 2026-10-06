@@ -71,14 +71,15 @@ function usePoolData() {
   const claudeQuota = useQuotaStore((state) => state.claudeQuota);
 
   const refresh = useCallback(
-    async (forceConfig = false) => {
+    /** `quiet` refreshes in the background without flipping the page into loading. */
+    async (forceConfig = false, quiet = false) => {
       if (!connected) return;
       const id = ++request.current;
       const revision = apiClient.getConnectionRevision();
       abort.current?.abort();
       const controller = new AbortController();
       abort.current = controller;
-      setData((previous) => ({ ...previous, loading: true }));
+      if (!quiet) setData((previous) => ({ ...previous, loading: true }));
       const results = await Promise.allSettled([
         authFilesApi.list(),
         historyApi.health('24h', controller.signal),
@@ -112,12 +113,16 @@ function usePoolData() {
     alive.current = true;
     void refresh();
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh(false, true);
+    }, 60_000);
     const onFilesChanged = () => void refresh();
     window.addEventListener(AUTH_FILES_CHANGED_EVENT, onFilesChanged);
     return () => {
       alive.current = false;
       abort.current?.abort();
       window.clearInterval(timer);
+      window.clearInterval(poll);
       window.removeEventListener(AUTH_FILES_CHANGED_EVENT, onFilesChanged);
     };
   }, [refresh]);
