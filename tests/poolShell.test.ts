@@ -5,6 +5,7 @@ import {
   tightestQuota,
   parseCredentialQuota,
   headlineQuota,
+  remainingPercent,
 } from '../src/features/providerWorkspace/quotaSignals';
 import { deriveAttention } from '../src/features/home/attention';
 import {
@@ -281,6 +282,13 @@ describe('overview alerts', () => {
       ['busy.json', 'quota_high'],
     ]);
     expect(attention[1].window).toMatchObject({ usedPercent: 89, periodHours: 168 });
+  });
+  test('bars drain: remaining is the inverse of usage and a rejected window has none left', () => {
+    const window = { id: 'w', label: 'w', usedPercent: 89, resetAtMs: null, periodHours: 168 };
+    expect(remainingPercent(window)).toBe(11);
+    expect(remainingPercent({ ...window, usedPercent: 140 })).toBe(0);
+    expect(remainingPercent({ ...window, usedPercent: null })).toBeNull();
+    expect(remainingPercent({ ...window, usedPercent: 10, rejected: true })).toBe(0);
   });
   test('per-model windows roll up to the fullest current window per period', () => {
     const windows = parseCredentialQuota('codex', null, {

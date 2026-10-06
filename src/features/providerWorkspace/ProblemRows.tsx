@@ -5,7 +5,7 @@ import type { Attention } from '@/features/home/attention';
 import { formatReset } from '@/features/shell/format';
 import { usePool } from './PoolContext';
 import { credentialLabel, providerPath } from './model';
-import { windowLabel } from './quotaSignals';
+import { remainingPercent, windowLabel } from './quotaSignals';
 import styles from './Workspace.module.scss';
 import { confirmAccountLogin, confirmPoolChange } from './actions';
 
@@ -45,7 +45,7 @@ export function ProblemRows({
                 {item.reason === 'quota_high' && item.window
                   ? t('shell.attention_quota_high', {
                       window: windowLabel(t, item.window).toLowerCase(),
-                      percent: Math.round(item.window.usedPercent ?? 0),
+                      percent: Math.round(remainingPercent(item.window) ?? 0),
                       when: item.window.resetAtMs
                         ? formatReset(item.window.resetAtMs, pool.now)
                         : t('shell.reset_unknown').toLowerCase(),

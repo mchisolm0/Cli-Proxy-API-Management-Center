@@ -1,6 +1,12 @@
 import { useTranslation } from 'react-i18next';
 import { formatReset } from '@/features/shell/format';
-import { quotaIsCurrent, quotaLevel, windowLabel, type QuotaWindow } from './quotaSignals';
+import {
+  quotaIsCurrent,
+  quotaLevel,
+  remainingPercent,
+  windowLabel,
+  type QuotaWindow,
+} from './quotaSignals';
 import styles from './QuotaBar.module.scss';
 
 /**
@@ -20,7 +26,8 @@ export function QuotaBar({
 }) {
   const { t } = useTranslation();
   const name = label ?? windowLabel(t, window, compact);
-  const percent = window.usedPercent;
+  // Bars drain: they show what is left, like the providers' own usage pages.
+  const left = remainingPercent(window);
   const stale = !quotaIsCurrent(window, now);
   return (
     <div
@@ -36,17 +43,23 @@ export function QuotaBar({
         aria-label={name}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={window.rejected ? 100 : percent === null ? undefined : Math.round(percent)}
-        aria-valuetext={window.rejected ? t('shell.exhausted') : undefined}
+        aria-valuenow={left === null ? undefined : Math.round(left)}
+        aria-valuetext={
+          window.rejected
+            ? t('shell.exhausted')
+            : left === null
+              ? undefined
+              : t('shell.left', { percent: Math.round(left) })
+        }
       >
-        <i style={{ width: `${Math.min(100, window.rejected ? 100 : (percent ?? 0))}%` }} />
+        <i style={{ width: `${left ?? 0}%` }} />
       </span>
       <strong>
         {window.rejected
           ? t('shell.exhausted')
-          : percent === null
+          : left === null
             ? '?'
-            : `${Math.round(percent)}%`}
+            : t('shell.left', { percent: Math.round(left) })}
       </strong>
       {!compact && (
         <span className={styles.reset}>

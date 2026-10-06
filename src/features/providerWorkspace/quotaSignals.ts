@@ -138,3 +138,10 @@ export const quotaLevel = (window: QuotaWindow) =>
     : (window.usedPercent ?? 0) >= QUOTA_WARNING_PERCENT
       ? 'warn'
       : 'ok';
+
+/** What is left of a window, 0-100; a rejected window has nothing left. */
+export function remainingPercent(window: QuotaWindow): number | null {
+  if (window.rejected) return 0;
+  if (window.usedPercent === null) return null;
+  return Math.max(0, Math.min(100, 100 - window.usedPercent));
+}
