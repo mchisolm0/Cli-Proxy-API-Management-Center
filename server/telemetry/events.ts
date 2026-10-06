@@ -77,10 +77,7 @@ function credentialName(name: string): boolean {
     ) ||
     // Acronym or run-together forms the camelCase split cannot separate.
     /(?:^|[_-])(?:api|jwt|auth|access|refresh|session|client)(?:key|token|secret)s?(?:[_-]|$)/i.test(
-      name
-        .replace(/([A-Z]+)([A-Z][a-z])/g, '$1$2')
-        .toLowerCase()
-        .replace(/(api|jwt)[-_]?/g, '$1')
+      name.toLowerCase().replace(/(api|jwt)[-_]?/g, '$1')
     )
   );
 }
@@ -195,11 +192,15 @@ function scanText(value: string, secrets: string[], deadline: number): string {
   }
   text = cookieParts.join('') + text.slice(cookieCopied);
   // URL delimiters are fixed; username/password runs cannot cross another URL's slashes.
-  text = text.replace(/(:\/\/[^\s/:@]*:)[^\s/@]+@/g, '$1[redacted]@');
-  text = text.replace(/(:\/\/)([^\s/:@]+)@/g, (match, scheme: string, user: string) =>
-    /^(?:gh[pousr]_|github_pat_|glpat-|x-access-token$)/i.test(user) || looksLikeSecret(user)
-      ? `${scheme}[redacted]@`
-      : match
+  // A token can be the username (https://ghp_x@github.com) with or without a password.
+  const tokenUser = (user: string) =>
+    /^(?:gh[pousr]_|github_pat_|glpat-)/i.test(user) || looksLikeSecret(user);
+  text = text.replace(
+    /(:\/\/)([^\s/:@]*)(:[^\s/@]+)?@/g,
+    (match, scheme: string, user: string, password?: string) => {
+      if (!password && !tokenUser(user)) return match;
+      return `${scheme}${tokenUser(user) ? REDACTED : user}${password ? `:${REDACTED}` : ''}@`;
+    }
   );
   // Run standalone tokens before assignment scanning so an ordinary quoted
   // key/token value containing a pasted credential cannot hide it.
@@ -238,9 +239,12 @@ function scanText(value: string, secrets: string[], deadline: number): string {
     if (expired()) return REDACTED;
     const value = assignmentValue(text, flags.lastIndex);
     flags.lastIndex = value.end;
-    // "the --token flag" names the flag; a plain lowercase word is not a value.
-    const quoted = /["']/.test(text[value.from - 1] || '');
-    if (!value.value || value.value === REDACTED || (!quoted && /^[a-z]+$/.test(value.value)))
+    // "the --token flag" names the flag rather than passing a value.
+    if (
+      !value.value ||
+      value.value === REDACTED ||
+      proseLabel(text, text.indexOf('--', flag.index))
+    )
       continue;
     flagParts.push(text.slice(flagCopied, value.from), REDACTED);
     flagCopied = value.to;

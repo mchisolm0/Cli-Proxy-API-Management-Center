@@ -1035,6 +1035,8 @@ test('CLI credential flags and indented YAML scalar values redact with their lay
     expect(redactText(`${flag}"short"`)).toBe(`${flag}"[redacted]"`);
   }
   expect(redactText('the --token flag is optional')).toBe('the --token flag is optional');
+  expect(redactText('mysql --password correcthorsebattery')).toBe('mysql --password [redacted]');
+  expect(redactText('x --token abcdefghijklmnop')).toBe('x --token [redacted]');
   for (const scalar of ['', '|', '|-', '>+', '|2', '|2-', '|-2']) {
     const text = `outer:\n  privateKey: ${scalar}\n    first-secret\n    second-secret\n  ordinary: keep`;
     const expected = `outer:\n  privateKey: ${scalar}\n    [redacted]\n    [redacted]\n  ordinary: keep`;
@@ -1174,6 +1176,11 @@ test('run-together credential names, URL username tokens and short shell flags',
     'git clone https://[redacted]@github.com/o/r.git'
   );
   expect(redactText('https://matt@github.com/o/r.git')).toBe('https://matt@github.com/o/r.git');
+  expect(redactText(`https://${token}:x-oauth-basic@github.com/o/r`)).toBe(
+    'https://[redacted]:[redacted]@github.com/o/r'
+  );
+  expect(redactText('postgres://app:hunter2@db/x')).toBe('postgres://app:[redacted]@db/x');
+  expect(redactText('redis://:hunter2@cache')).toBe('redis://:[redacted]@cache');
   for (const command of [
     'find . -path ./node_modules -prune -o -print',
     'gcc -pthread main.c',
