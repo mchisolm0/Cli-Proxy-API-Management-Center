@@ -1037,6 +1037,13 @@ test('CLI credential flags and indented YAML scalar values redact with their lay
   expect(redactText('the --token flag is optional')).toBe('the --token flag is optional');
   expect(redactText('mysql --password correcthorsebattery')).toBe('mysql --password [redacted]');
   expect(redactText('x --token abcdefghijklmnop')).toBe('x --token [redacted]');
+  expect(redactText('The --password option is required')).toBe('The --password option is required');
+  for (const leak of [
+    'pass the --token "hunter2hunter2" to the cli',
+    'use the --password Hunter2! when prompted',
+    'run it with the --password correcthorsebattery',
+  ])
+    expect(redactText(leak)).toContain('[redacted]');
   for (const scalar of ['', '|', '|-', '>+', '|2', '|2-', '|-2']) {
     const text = `outer:\n  privateKey: ${scalar}\n    first-secret\n    second-secret\n  ordinary: keep`;
     const expected = `outer:\n  privateKey: ${scalar}\n    [redacted]\n    [redacted]\n  ordinary: keep`;

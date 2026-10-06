@@ -240,12 +240,11 @@ function scanText(value: string, secrets: string[], deadline: number): string {
     const value = assignmentValue(text, flags.lastIndex);
     flags.lastIndex = value.end;
     // "the --token flag" names the flag rather than passing a value.
-    if (
-      !value.value ||
-      value.value === REDACTED ||
-      proseLabel(text, text.indexOf('--', flag.index))
-    )
-      continue;
+    const namesFlag =
+      proseLabel(text, text.indexOf('--', flag.index)) &&
+      !/["']/.test(text[value.from - 1] ?? '') &&
+      /^(?:flag|option|argument|arg|parameter|param|switch|setting|value)s?$/i.test(value.value);
+    if (!value.value || value.value === REDACTED || namesFlag) continue;
     flagParts.push(text.slice(flagCopied, value.from), REDACTED);
     flagCopied = value.to;
   }
