@@ -1,0 +1,14 @@
+.git
+node_modules
+dist
+data
+fixtures
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log
+.env
+.env.*
+.codex
+.agents
+CLAUDE.md

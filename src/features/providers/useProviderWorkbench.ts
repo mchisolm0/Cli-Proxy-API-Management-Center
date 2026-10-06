@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { providersApi } from '@/services/api';
+import { apiClient } from '@/services/api/client';
 import { getErrorMessage } from '@/utils/helpers';
 import { useAuthStore, useConfigStore } from '@/stores';
 import {
@@ -485,6 +486,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
   const connected = connectionStatus === 'connected';
 
   const refetch = useCallback(async () => {
+    const connectionRevision = apiClient.getConnectionRevision();
     setIsFetching(true);
     setErrorMessage(null);
     try {
@@ -493,6 +495,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
         providersApi.getVertexConfigs(),
         providersApi.getOpenAIProviders(),
       ]);
+      if (connectionRevision !== apiClient.getConnectionRevision()) return;
       if (configResult.status !== 'fulfilled') {
         throw configResult.reason;
       }
@@ -785,6 +788,10 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
 
   const deleteProvider = useCallback(
     async (resource: ProviderResource) => {
+      const connectionRevision = apiClient.getConnectionRevision();
+      const updateCurrentConfig: typeof updateConfigValue = (section, value) => {
+        if (connectionRevision === apiClient.getConnectionRevision()) updateConfigValue(section, value);
+      };
       setMutating(true);
       try {
         const sel = resource.selector;
@@ -795,7 +802,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
             (resource.raw as ProviderKeyConfig).source
           );
           const next = (config?.geminiApiKeys ?? []).filter((_, i) => i !== sel.index);
-          updateConfigValue('gemini-api-key', next);
+          updateCurrentConfig('gemini-api-key', next);
         } else if (sel.brand === 'interactions') {
           await providersApi.deleteInteractionsKey(
             sel.apiKey,
@@ -803,7 +810,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
             (resource.raw as ProviderKeyConfig).source
           );
           const next = (config?.interactionsApiKeys ?? []).filter((_, i) => i !== sel.index);
-          updateConfigValue('interactions-api-key', next);
+          updateCurrentConfig('interactions-api-key', next);
         } else if (sel.brand === 'codex') {
           await providersApi.deleteCodexConfig(
             sel.apiKey,
@@ -811,7 +818,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
             (resource.raw as ProviderKeyConfig).source
           );
           const next = (config?.codexApiKeys ?? []).filter((_, i) => i !== sel.index);
-          updateConfigValue('codex-api-key', next);
+          updateCurrentConfig('codex-api-key', next);
         } else if (sel.brand === 'meta') {
           await providersApi.deleteMetaConfig(
             sel.apiKey,
@@ -819,7 +826,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
             (resource.raw as ProviderKeyConfig).source
           );
           const next = (config?.metaApiKeys ?? []).filter((_, i) => i !== sel.index);
-          updateConfigValue('meta-api-key', next);
+          updateCurrentConfig('meta-api-key', next);
         } else if (sel.brand === 'xai') {
           await providersApi.deleteXAIConfig(
             sel.apiKey,
@@ -827,7 +834,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
             (resource.raw as ProviderKeyConfig).source
           );
           const next = (config?.xaiApiKeys ?? []).filter((_, i) => i !== sel.index);
-          updateConfigValue('xai-api-key', next);
+          updateCurrentConfig('xai-api-key', next);
         } else if (sel.brand === 'claude') {
           await providersApi.deleteClaudeConfig(
             sel.apiKey,
@@ -835,7 +842,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
             (resource.raw as ProviderKeyConfig).source
           );
           const next = (config?.claudeApiKeys ?? []).filter((_, i) => i !== sel.index);
-          updateConfigValue('claude-api-key', next);
+          updateCurrentConfig('claude-api-key', next);
         } else if (sel.brand === 'vertex') {
           await providersApi.deleteVertexConfig(
             sel.apiKey,
@@ -843,7 +850,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
             (resource.raw as ProviderKeyConfig).source
           );
           const next = (config?.vertexApiKeys ?? []).filter((_, i) => i !== sel.index);
-          updateConfigValue('vertex-api-key', next);
+          updateCurrentConfig('vertex-api-key', next);
         } else if (sel.brand === 'openaiCompatibility') {
           await providersApi.deleteOpenAIProvider(
             sel.index,
@@ -852,7 +859,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
           const next = (config?.openaiCompatibility ?? []).filter(
             (item, index) => (item.sourceIndex ?? index) !== sel.index
           );
-          updateConfigValue('openai-compatibility', next);
+          updateCurrentConfig('openai-compatibility', next);
         } else if (
           sel.brand === 'apikeyFun' ||
           sel.brand === 'fennoAI' ||

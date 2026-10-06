@@ -1,0 +1,216 @@
+.page {
+  max-width: 1120px;
+  margin: 0 auto;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  h1 {
+    font-size: 24px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  h2 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 24px 0 12px;
+  }
+  :is(button, a):focus-visible {
+    outline: 2px solid var(--text-secondary);
+    outline-offset: 3px;
+  }
+}
+.header,
+.controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+.header {
+  margin-bottom: 24px;
+}
+.windows {
+  display: flex;
+  gap: 12px;
+  button {
+    padding: 8px 2px;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    &[aria-pressed='true'] {
+      color: var(--text-primary);
+      border-bottom-color: var(--text-primary);
+    }
+  }
+}
+.category,
+.row {
+  --class-color: var(--text-secondary);
+  &[data-class='auth'] {
+    --class-color: var(--failure-badge-text);
+  }
+  &[data-class='quota'] {
+    --class-color: var(--amber-text);
+  }
+  &[data-class='upstream'] {
+    --class-color: var(--viz-failure);
+  }
+  &[data-class='transport'] {
+    --class-color: var(--success-badge-text);
+  }
+  &[data-class='client'] {
+    --class-color: var(--primary-active);
+  }
+}
+.category {
+  color: var(--class-color);
+  font-weight: 600;
+  font-size: 12px;
+}
+.row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 16px;
+  width: 100%;
+  padding: 18px 12px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border-color);
+  border-left: 3px solid var(--class-color);
+  color: var(--text-primary);
+  cursor: pointer;
+  &:hover {
+    background: var(--bg-tertiary);
+  }
+  &:disabled {
+    opacity: 0.55;
+    cursor: wait;
+  }
+}
+.rank {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.description {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+.description strong {
+  font-weight: 500;
+}
+.description > span:not(.category) {
+  font-size: 13px;
+}
+.fix {
+  color: var(--text-secondary);
+}
+.numbers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  span:last-child {
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+}
+.back {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 8px 0;
+  cursor: pointer;
+}
+.detail {
+  > h1 {
+    margin-bottom: 12px;
+  }
+  > .category {
+    margin-top: 16px;
+  }
+  > .fix {
+    margin: 12px 0 20px;
+  }
+}
+.explanation {
+  margin-top: 12px;
+}
+.metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px 32px;
+  padding: 20px 0;
+  border-block: 1px solid var(--border-color);
+  dt {
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  dd {
+    font-variant-numeric: tabular-nums;
+  }
+}
+.note {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-top: 12px;
+}
+.examples {
+  li {
+    padding: 16px 0;
+    border-top: 1px solid var(--border-color);
+  }
+  pre {
+    font: 12px/1.6 $font-mono;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+.exampleHeading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+.sessions a {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 8px;
+  border-top: 1px solid var(--border-color);
+  overflow-wrap: anywhere;
+  &:hover {
+    background: var(--bg-tertiary);
+  }
+  > span:last-child {
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+}
+@media (max-width: 768px) {
+  .header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .row {
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .numbers {
+    grid-column: 2;
+    flex-direction: row;
+    flex-wrap: wrap;
+    text-align: left;
+    white-space: normal;
+    font-size: 12px;
+  }
+}
