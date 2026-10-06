@@ -40,19 +40,32 @@ import { OAuthDialog } from './OAuthDialog';
 import { confirmAccountLogin, confirmPoolChange } from './actions';
 import styles from './Workspace.module.scss';
 
+function lastReadings(windows: QuotaWindow[], now: number): QuotaWindow[] {
+  const byPeriod = new Map<string, QuotaWindow>();
+  for (const window of windows) {
+    if (window.model || (window.resetAtMs !== null && window.resetAtMs <= now)) continue;
+    const key = window.periodHours === null ? window.label : String(window.periodHours);
+    const previous = byPeriod.get(key);
+    if (!previous || (window.observedAt ?? 0) > (previous.observedAt ?? 0))
+      byPeriod.set(key, window);
+  }
+  return [...byPeriod.values()];
+}
+
 /** Headline 5 hour / weekly bars; per-model windows stay one click away. */
 function QuotaMeters({ windows, now }: { windows: QuotaWindow[]; now: number }) {
   const { t } = useTranslation();
   const current = headlineQuota(windows, now);
-  // With nothing current, show the last readings marked stale rather than nothing.
-  const headline = current.length ? current : windows.filter((window) => !window.model);
+  // With nothing current, show the newest pre-reset reading per period, marked stale.
+  // Windows past their reset have refilled, so their old readings would mislead.
+  const headline = current.length ? current : lastReadings(windows, now);
   const perModel = windows.filter((window) => window.model);
   if (!headline.length && !perModel.length)
     return <p className={styles.muted}>{t('shell.quota_unknown')}</p>;
   return (
     <div className={styles.meters}>
-      {headline.map((window) => (
-        <QuotaBar key={window.id} window={window} now={now} />
+      {headline.map((window, index) => (
+        <QuotaBar key={`${window.id}:${index}`} window={window} now={now} />
       ))}
       {perModel.length > 0 && (
         <details className={styles.perModel}>
@@ -189,11 +202,7 @@ function Workspace({ id }: { id: string }) {
     (item) => item.provider === provider.id && item.reason !== 'quota_high'
   );
   const paused = providerPaused(provider);
-  const status = providerStatus(
-    provider,
-    pool.attention,
-    !pool.loading && !pool.errors.includes('credentials')
-  );
+  const status = providerStatus(provider, pool.attention, pool.known);
   const exposed = new Set(
     provider.oauth ? models : provider.resources.flatMap((resource) => resource.models)
   );

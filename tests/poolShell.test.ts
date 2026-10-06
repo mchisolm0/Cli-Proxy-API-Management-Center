@@ -440,6 +440,41 @@ describe('provider identity', () => {
     expect(providerTraffic(providers[0], [traffic])).toMatchObject({ requests: 100, failures: 0 });
     expect(providerTraffic(providers[2], [traffic])).toMatchObject({ requests: 50, failures: 10 });
   });
+  test('a merged provider sums name-level traffic from every channel it absorbed', () => {
+    const [merged] = workspaceProviders(
+      {
+        metaApiKeys: [{ apiKey: 'fixture-1', baseUrl: 'https://opencode.ai/zen/go/v1' }],
+        openaiCompatibility: [
+          { name: 'opencode-go', baseUrl: 'https://opencode.ai/zen/go/v1', apiKeyEntries: [] },
+        ],
+      },
+      []
+    ).filter((provider) => !provider.oauth);
+    const named = (provider: string, requests: number): ProviderHealth => ({
+      provider,
+      requests,
+      failures: 1,
+      failureRate: 1 / requests,
+      latency: { p50: 100, p95: 200 },
+      ttft: { p50: null, p95: null },
+      tokens: 10,
+      websocket: 0,
+      http: requests,
+      unknown: 0,
+      errorCounts: { auth: 0, quota: 0, upstream: 1, transport: 0, client: 0, other: 0 },
+      usageErrorCounts: { auth: 0, quota: 0, upstream: 0, transport: 0, client: 0, other: 0 },
+      authSummary: {},
+      credentials: [],
+    });
+    expect(providerTraffic(merged, [named('meta', 20), named('opencode-go', 5)])).toEqual({
+      requests: 25,
+      failures: 2,
+      tokens: 20,
+      // Percentiles from two distributions cannot be combined.
+      p50: null,
+      ttft: null,
+    });
+  });
 });
 
 test('palette scalar edits only save changed, valid values', () => {

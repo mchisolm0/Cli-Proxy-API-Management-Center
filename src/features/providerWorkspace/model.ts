@@ -165,17 +165,19 @@ export function providerTraffic(provider: WorkspaceProvider, health: ProviderHea
       ttft: percentiles?.ttft.p50 ?? null,
     };
   }
+  // Health named after the provider with no per-credential rows; merged providers sum
+  // every channel. API-key providers never borrow a same-named OAuth channel's totals.
   if (
-    named &&
-    !named.credentials.length &&
+    matches.length &&
+    matches.every((item) => !item.credentials.length) &&
     (provider.oauth || provider.brand === 'openaiCompatibility')
   ) {
     return {
-      requests: named.requests,
-      failures: named.failures,
-      tokens: named.tokens,
-      p50: named.latency.p50,
-      ttft: named.ttft.p50,
+      requests: matches.reduce((sum, item) => sum + item.requests, 0),
+      failures: matches.reduce((sum, item) => sum + item.failures, 0),
+      tokens: matches.reduce((sum, item) => sum + item.tokens, 0),
+      p50: named?.latency.p50 ?? null,
+      ttft: named?.ttft.p50 ?? null,
     };
   }
   return null;
