@@ -1,7 +1,7 @@
 .quota {
   --fill: var(--success-color);
   display: grid;
-  grid-template-columns: 64px minmax(80px, 280px) 64px auto;
+  grid-template-columns: 64px minmax(80px, 280px) 72px auto;
   align-items: center;
   gap: 10px;
   font-size: 13px;
@@ -21,7 +21,7 @@
     opacity: 0.55;
   }
   &[data-compact='true'] {
-    grid-template-columns: 22px minmax(40px, 1fr) 56px;
+    grid-template-columns: 22px minmax(40px, 1fr) auto;
     gap: 8px;
     font-size: 12px;
   }
@@ -29,6 +29,7 @@
     font-weight: 500;
     font-variant-numeric: tabular-nums;
     text-align: right;
+    white-space: nowrap;
   }
 }
 .label {
