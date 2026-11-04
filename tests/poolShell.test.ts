@@ -73,7 +73,7 @@ describe('workspace quota observations', () => {
     expect(quotaIsCurrent(windows[0], now + 59999)).toBe(true);
     expect(quotaIsCurrent(windows[0], now + 60000)).toBe(false);
     expect(
-      deriveAttention([{ name: 'a', type: 'codex', quota: observation }], [], [], now + 60000)
+      deriveAttention([{ name: 'a', type: 'codex', quota: observation }], [], now + 60000)
     ).toEqual([]);
     expect(
       parseQuotaSignals('codex', {
@@ -149,7 +149,6 @@ describe('home attention', () => {
         problem(),
         problem({ key: 'transport', provider: 'claude', category: 'transport', code: 'timeout' }),
       ],
-      [],
       now
     );
     expect(attention.map((item) => item.reason)).toEqual(['auth', 'problem']);
@@ -165,8 +164,8 @@ describe('home attention', () => {
         statusMessage: 'invalid_grant',
       },
     ];
-    expect(deriveAttention(paused, [], [], now)).toEqual([]);
-    expect(deriveAttention(paused, [problem()], [], now).map((item) => item.reason)).toEqual([
+    expect(deriveAttention(paused, [], now)).toEqual([]);
+    expect(deriveAttention(paused, [problem()], now).map((item) => item.reason)).toEqual([
       'problem',
     ]);
     expect(
@@ -176,15 +175,9 @@ describe('home attention', () => {
           { name: 'broken.json', type: 'codex', status: 'error', statusMessage: 'invalid_grant' },
         ],
         [],
-        [],
         now
       ).map((item) => item.file?.name)
     ).toEqual(['broken.json']);
-    const traffic = { provider: 'codex', failures: 2, errorCounts: { auth: 2 } } as ProviderHealth;
-    expect(deriveAttention(paused, [], [traffic], now)[0]).toMatchObject({
-      reason: 'traffic',
-      category: 'auth',
-    });
   });
   test('uses live cooldown deadlines and distinguishes transient failures from quota', () => {
     const attention = deriveAttention(
@@ -211,12 +204,11 @@ describe('home attention', () => {
         },
       ],
       [],
-      [],
       now
     );
     expect(attention).toHaveLength(1);
     expect(attention[0]).toMatchObject({ reason: 'cooldown', category: 'upstream' });
-    expect(deriveAttention([], [], [], now)).toEqual([]);
+    expect(deriveAttention([], [], now)).toEqual([]);
   });
   test('Claude rejected quota without a utilization still needs attention', () => {
     expect(
@@ -232,7 +224,6 @@ describe('home attention', () => {
             },
           },
         ],
-        [],
         [],
         now
       )[0]
@@ -255,16 +246,23 @@ describe('overview alerts', () => {
         problem({ key: 'cancel', provider: 'claude', category: 'client', code: '499' }),
         problem({ key: 'odd', provider: 'claude', category: 'other', code: 'x' }),
       ],
-      [
-        {
-          provider: 'claude',
-          failures: 1,
-          errorCounts: { auth: 0, quota: 0, upstream: 0, transport: 0, client: 1, other: 0 },
-        } as unknown as ProviderHealth,
-      ],
       now
     );
     expect(attention).toEqual([]);
+  });
+  test('failures the proxy retried away or that stopped an hour ago stay off the home page', () => {
+    const blip = { provider: 'claude', category: 'upstream' as const, inferredFinalFailures: 0 };
+    const attention = deriveAttention(
+      [],
+      [
+        problem({ ...blip, key: 'retried', code: '529', retriedAttempts: 2 }),
+        problem({ ...blip, key: 'proxy-only', code: '503', attemptErrors: 2 }),
+        problem({ key: 'stale', lastSeen: now - 2 * 60 * 60 * 1000 }),
+        problem({ key: 'live', provider: 'claude', category: 'upstream', code: '500' }),
+      ],
+      now
+    );
+    expect(attention.map((item) => [item.id, item.count])).toEqual([['problem:live', 5]]);
   });
   test('a window at 85% warns early, after anything that is actually broken', () => {
     const attention = deriveAttention(
@@ -273,7 +271,6 @@ describe('overview alerts', () => {
         { name: 'calm.json', type: 'codex', quota: codexWindow('40') },
         { name: 'broken.json', type: 'claude', status: 'error', statusMessage: '401' },
       ],
-      [],
       [],
       now
     );
