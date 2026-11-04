@@ -3,6 +3,7 @@ import type { ProviderHealth } from '@/services/history';
 import { buildProviderGroups } from '@/features/providers/useProviderWorkbench';
 import type { ProviderBrand, ProviderResource } from '@/features/providers/types';
 import { normalizeOAuthProviderKey } from '@/utils/providerKeys';
+import { providerLabel } from '@/features/dashboard/utils';
 
 export type WorkspaceProvider = {
   id: string;
@@ -38,7 +39,7 @@ export function workspaceProviders(
   ]);
   const providers: WorkspaceProvider[] = [...channels].map((channel) => ({
     id: channel,
-    name: channel === 'codex' ? 'Codex' : channel === 'claude' ? 'Claude' : channel,
+    name: providerLabel(channel, channel),
     channel,
     channels: [channel],
     oauth: true,

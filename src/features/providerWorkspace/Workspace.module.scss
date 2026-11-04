@@ -168,21 +168,70 @@
   color: var(--warning-text);
   margin: 10px 0 20px;
 }
-.oauth {
+.login {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--primary-color);
+  background: color-mix(in srgb, var(--primary-color) 7%, transparent);
+  border-radius: 0 4px 4px 0;
+  &[data-status='done'] {
+    border-left-color: var(--success-color, var(--primary-color));
+  }
+  &[data-status='error'] {
+    border-left-color: var(--error-color);
+  }
+  p {
+    margin: 0;
+    color: var(--text-secondary);
+  }
+  summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+  }
   form {
     display: flex;
-    flex-direction: column;
-    gap: 12px;
+    gap: 8px;
+    margin-top: 8px;
   }
   input {
+    flex: 1;
+    min-width: 0;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
-    padding: 10px;
+    padding: 6px 10px;
     border-radius: 4px;
+  }
+}
+.loginHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.loginFlow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.deviceCode {
+  font-size: 18px;
+  letter-spacing: 0.1em;
+  color: var(--text-primary);
+  user-select: all;
+}
+.addAccount {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 16px;
+  > span {
+    color: var(--text-secondary);
+    margin-right: 6px;
   }
 }
 .palette {

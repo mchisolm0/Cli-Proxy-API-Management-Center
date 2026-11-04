@@ -17,7 +17,8 @@ import { headlineQuota } from '@/features/providerWorkspace/quotaSignals';
 import { providerStatus } from '@/features/providerWorkspace/status';
 import { QuotaBar } from '@/features/providerWorkspace/QuotaBar';
 import { CommandPalette } from '@/features/palette/CommandPalette';
-import { OAuthDialog } from '@/features/providerWorkspace/OAuthDialog';
+import { LoginPanel } from '@/features/providerWorkspace/LoginPanel';
+import { useLogin } from '@/features/providerWorkspace/loginStore';
 import styles from './Shell.module.scss';
 
 export function PoolLayout() {
@@ -36,7 +37,7 @@ function Shell() {
   const pool = usePool();
   const location = useLocation();
   const [palette, setPalette] = useState(false);
-  const [login, setLogin] = useState<string | null>(null);
+  const login = useLogin((state) => state.login);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginResourceEntry[]>([]);
   const supportsPlugin = useAuthStore((state) => state.supportsPlugin);
@@ -58,6 +59,11 @@ function Shell() {
     content.current?.scrollTo(0, 0);
     setMobileOpen(false);
   }, [location.pathname]);
+  // The sign-in panel sits above the page, so bring it into view wherever it was started.
+  const loginAttempt = login?.attempt;
+  useEffect(() => {
+    if (loginAttempt) content.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [loginAttempt]);
   useEffect(() => {
     let active = true;
     const revision = apiClient.getConnectionRevision();
@@ -182,10 +188,10 @@ function Shell() {
         <div className={styles.version}>{version || t('shell.proxy')}</div>
       </aside>
       <main ref={content} id="pool-content" tabIndex={-1} className={`${styles.content} content`}>
+        {login && <LoginPanel key={login.attempt} login={login} />}
         <MainRoutes />
       </main>
-      {palette && <CommandPalette onClose={() => setPalette(false)} onLogin={setLogin} />}
-      {login && <OAuthDialog key={login} provider={login} onClose={() => setLogin(null)} />}
+      {palette && <CommandPalette onClose={() => setPalette(false)} />}
     </div>
   );
 }

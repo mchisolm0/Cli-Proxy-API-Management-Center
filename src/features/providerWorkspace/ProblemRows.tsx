@@ -7,20 +7,20 @@ import { usePool } from './PoolContext';
 import { credentialLabel, providerPath } from './model';
 import { remainingPercent, windowLabel } from './quotaSignals';
 import styles from './Workspace.module.scss';
-import { confirmAccountLogin, confirmPoolChange } from './actions';
+import { confirmPoolChange } from './actions';
+import { canLogin, useLogin } from './loginStore';
 
 /** One line per alert: what happened, then the action that fixes it. */
 export function ProblemRows({
   items,
-  onLogin,
   showProvider = true,
 }: {
   items: Attention[];
-  onLogin: (provider: string) => void;
   showProvider?: boolean;
 }) {
   const { t } = useTranslation();
   const pool = usePool();
+  const startLogin = useLogin((state) => state.start);
   return (
     <div className={styles.alerts}>
       {items.map((item) => {
@@ -28,11 +28,7 @@ export function ProblemRows({
           (entry) => entry.id === item.provider || entry.channels.includes(item.provider)
         );
         const name = provider?.name || item.provider || t('shell.proxy');
-        const login =
-          provider?.oauth &&
-          ['codex', 'claude', 'antigravity', 'kimi', 'xai', 'devin', 'meta'].includes(
-            provider.channel
-          );
+        const login = provider?.oauth && canLogin(provider.channel);
         const account =
           item.file && provider && provider.files.length > 1 ? credentialLabel(item.file) : '';
         const session = item.problem?.sessions[0];
@@ -63,9 +59,7 @@ export function ProblemRows({
                 <Button
                   size="sm"
                   onClick={() =>
-                    confirmAccountLogin(item.file ? credentialLabel(item.file) : name, () =>
-                      onLogin(provider.channel)
-                    )
+                    startLogin(provider.channel, item.file ? credentialLabel(item.file) : undefined)
                   }
                 >
                   {t('shell.relogin')}

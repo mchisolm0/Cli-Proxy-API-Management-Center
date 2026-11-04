@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/stores';
@@ -8,7 +7,6 @@ import { ThroughputChart } from '@/features/dashboard/components/ThroughputChart
 import { usePool } from '@/features/providerWorkspace/PoolContext';
 import { ProviderTable } from '@/features/providerWorkspace/ProviderTable';
 import { ProblemRows } from '@/features/providerWorkspace/ProblemRows';
-import { OAuthDialog } from '@/features/providerWorkspace/OAuthDialog';
 import { SessionRows } from '@/features/shell/SessionRows';
 import { formatCount, formatDuration } from '@/features/shell/format';
 import styles from '@/features/providerWorkspace/Workspace.module.scss';
@@ -20,7 +18,6 @@ export function HomePage() {
   const overview = useDashboardOverview();
   useHeaderRefresh(overview.refresh, overview.connected);
   const version = useAuthStore((state) => state.serverVersion);
-  const [login, setLogin] = useState<string | null>(null);
   const { traffic, counts, credentials } = overview;
   const known = pool.known;
   const stats: [string, string][] = [
@@ -55,7 +52,7 @@ export function HomePage() {
       )}
       <section aria-label={t('shell.alerts')}>
         {pool.attention.length > 0 ? (
-          <ProblemRows items={pool.attention.slice(0, 5)} onLogin={setLogin} />
+          <ProblemRows items={pool.attention.slice(0, 5)} />
         ) : (
           <p className={styles.allClear}>
             <span className={styles.dot} data-status={known ? 'ok' : 'unknown'} />
@@ -102,7 +99,6 @@ export function HomePage() {
         <SessionRows sessions={pool.recent?.sessions.slice(0, 6) ?? []} now={pool.now} />
         {!pool.loading && pool.recent?.sessions.length === 0 && <p>{t('shell.no_sessions')}</p>}
       </section>
-      {login && <OAuthDialog key={login} provider={login} onClose={() => setLogin(null)} />}
     </div>
   );
 }

@@ -28,16 +28,6 @@ export function confirmPoolChange(
   });
 }
 
-/** OAuth selects its identity during sign-in, so account repair requires the same account. */
-export function confirmAccountLogin(name: string, onConfirm: () => void) {
-  useNotificationStore.getState().showConfirmation({
-    title: i18n.t('shell.relogin'),
-    message: i18n.t('shell.relogin_confirm', { name }),
-    confirmText: i18n.t('shell.open_signin'),
-    onConfirm,
-  });
-}
-
 /** Keep mutations in order; reads bypass pending mutations and never hold up later actions. */
 export function createMutationQueue() {
   let pending = Promise.resolve();

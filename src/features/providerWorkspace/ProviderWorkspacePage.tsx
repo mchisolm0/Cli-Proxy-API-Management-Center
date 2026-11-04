@@ -36,8 +36,9 @@ import { providerPaused, providerStatus } from './status';
 import { SessionRows } from '@/features/shell/SessionRows';
 import { formatCount, formatSeconds } from '@/features/shell/format';
 import { ProblemRows } from './ProblemRows';
-import { OAuthDialog } from './OAuthDialog';
-import { confirmAccountLogin, confirmPoolChange } from './actions';
+import { confirmPoolChange } from './actions';
+import { canLogin, LOGIN_CHANNELS, useLogin } from './loginStore';
+import { providerLabel } from '@/features/dashboard/utils';
 import styles from './Workspace.module.scss';
 
 const pressure = (window: QuotaWindow) => (window.rejected ? Infinity : (window.usedPercent ?? -1));
@@ -91,6 +92,7 @@ function QuotaMeters({ windows, now }: { windows: QuotaWindow[]; now: number }) 
 export function ProvidersPage() {
   const { t } = useTranslation();
   const pool = usePool();
+  const startLogin = useLogin((state) => state.start);
   return (
     <div className={styles.page}>
       <header className={styles.header}>
@@ -104,6 +106,14 @@ export function ProvidersPage() {
           </Link>
         </div>
       </header>
+      <div className={styles.addAccount}>
+        <span>{t('shell.add_account')}</span>
+        {LOGIN_CHANNELS.map((channel) => (
+          <Button key={channel} size="sm" variant="secondary" onClick={() => startLogin(channel)}>
+            {providerLabel(channel, channel)}
+          </Button>
+        ))}
+      </div>
       <ProviderTable known={pool.known} />
     </div>
   );
@@ -127,7 +137,7 @@ function Workspace({ id }: { id: string }) {
   const pool = usePool();
   const [params, setParams] = useSearchParams();
   const provider = pool.providers.find((entry) => entry.id === id);
-  const [login, setLogin] = useState<string | null>(null);
+  const startLogin = useLogin((state) => state.start);
   const [details, setDetails] = useState<AuthFileItem | null>(null);
   const [sheet, setSheet] = useState<ProviderSheetState>({
     open: false,
@@ -217,12 +227,10 @@ function Workspace({ id }: { id: string }) {
         exposed.has(session.model)
     )
     .slice(0, 5);
-  const loginSupported =
-    provider.oauth &&
-    ['codex', 'claude', 'antigravity', 'kimi', 'xai', 'devin', 'meta'].includes(provider.channel);
+  const loginSupported = provider.oauth && canLogin(provider.channel);
   const shared = sharedResource(provider);
   const add = () => {
-    if (loginSupported) setLogin(provider.channel);
+    if (loginSupported) startLogin(provider.channel);
     // A merged endpoint gets its new key in the OpenAI-compatible block's key list.
     else if (shared) setSheet({ open: true, brand: shared.brand, mode: 'edit', resource: shared });
     else if (provider.brand)
@@ -356,7 +364,7 @@ function Workspace({ id }: { id: string }) {
       </div>
       {problems.length > 0 && (
         <section className={styles.section}>
-          <ProblemRows items={problems} onLogin={setLogin} showProvider={false} />
+          <ProblemRows items={problems} showProvider={false} />
         </section>
       )}
       {!provider.oauth && pool.quotaForProvider(provider).length > 0 && (
@@ -390,9 +398,7 @@ function Workspace({ id }: { id: string }) {
                     <Button
                       size="sm"
                       variant="secondary"
-                      onClick={() =>
-                        confirmAccountLogin(credentialLabel(file), () => setLogin(provider.channel))
-                      }
+                      onClick={() => startLogin(provider.channel, credentialLabel(file))}
                     >
                       {t('shell.relogin')}
                     </Button>
@@ -708,7 +714,6 @@ function Workspace({ id }: { id: string }) {
           }}
         />
       )}
-      {login && <OAuthDialog key={login} provider={login} onClose={() => setLogin(null)} />}
     </div>
   );
 }
