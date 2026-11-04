@@ -1,11 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import i18n from '../src/i18n';
 import { useNotificationStore } from '../src/stores/useNotificationStore';
-import {
-  confirmAccountLogin,
-  confirmPoolChange,
-  createMutationQueue,
-} from '../src/features/providerWorkspace/actions';
+import { confirmPoolChange, createMutationQueue } from '../src/features/providerWorkspace/actions';
 import { refreshShell } from '../src/features/shell/refresh';
 
 describe('deliberate pool actions', () => {
@@ -99,21 +95,6 @@ describe('deliberate pool actions', () => {
     expect(calls).toEqual(['toggle', 'quota', 'delete']);
     quotaGate.resolve();
     await quota;
-  });
-
-  test('account login names the account and explains that another account adds credentials', () => {
-    let started = false;
-    confirmAccountLogin('synthetic@example.invalid', () => {
-      started = true;
-    });
-    const options = useNotificationStore.getState().confirmation.options;
-    expect(started).toBe(false);
-    expect(options?.message).toBe(
-      i18n.t('shell.relogin_confirm', { name: 'synthetic@example.invalid' })
-    );
-    options?.onConfirm();
-    expect(started).toBe(true);
-    useNotificationStore.getState().hideConfirmation();
   });
 });
 

@@ -20,6 +20,8 @@ import {
 } from './ranking';
 import styles from '@/features/providerWorkspace/Workspace.module.scss';
 import { confirmPoolChange } from '@/features/providerWorkspace/actions';
+import { canLogin, LOGIN_CHANNELS, useLogin } from '@/features/providerWorkspace/loginStore';
+import { providerLabel } from '@/features/dashboard/utils';
 
 type Command = {
   id: string;
@@ -147,14 +149,9 @@ function SettingEditor({
   );
 }
 
-export function CommandPalette({
-  onClose,
-  onLogin,
-}: {
-  onClose: () => void;
-  onLogin: (provider: string) => void;
-}) {
+export function CommandPalette({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
+  const startLogin = useLogin((state) => state.start);
   const navigate = useNavigate();
   const pool = usePool();
   const config = useConfigStore((state) => state.config);
@@ -225,20 +222,12 @@ export function CommandPalette({
             provider: provider.name,
           }),
           run: () =>
-            provider.oauth &&
-            ['codex', 'claude', 'antigravity', 'kimi', 'xai', 'devin', 'meta'].includes(
-              provider.channel
-            )
-              ? (onClose(), onLogin(provider.channel))
+            provider.oauth && canLogin(provider.channel)
+              ? (onClose(), startLogin(provider.channel))
               : go(provider.oauth ? '/auth-files' : `${path}?add=1`),
         },
       ];
-      if (
-        provider.oauth &&
-        ['codex', 'claude', 'antigravity', 'kimi', 'xai', 'devin', 'meta'].includes(
-          provider.channel
-        )
-      )
+      if (provider.oauth && canLogin(provider.channel))
         commands.push({
           id: `login:${provider.id}`,
           group: t('shell.actions'),
@@ -246,7 +235,7 @@ export function CommandPalette({
           keywords: 'oauth login',
           run: () => {
             onClose();
-            onLogin(provider.channel);
+            startLogin(provider.channel);
           },
         });
       commands.push(
@@ -280,6 +269,20 @@ export function CommandPalette({
       );
       return commands;
     }),
+    // Sign-in providers with no account yet have no provider row to hang the command on.
+    ...LOGIN_CHANNELS.filter(
+      (channel) =>
+        !pool.providers.some((provider) => provider.oauth && provider.channel === channel)
+    ).map((channel) => ({
+      id: `add:${channel}`,
+      group: t('shell.actions'),
+      label: t('shell.add_named_account', { provider: providerLabel(channel, channel) }),
+      keywords: 'oauth login sign in',
+      run: () => {
+        onClose();
+        startLogin(channel);
+      },
+    })),
     ...CONFIG_FIELD_SEARCH_INDEX.map((entry) => ({
       id: `setting:${entry.fieldId}`,
       group: t('shell.settings'),

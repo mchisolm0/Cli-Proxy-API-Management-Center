@@ -396,8 +396,15 @@ describe('provider identity', () => {
           { name: 'opencode-go', baseUrl: 'https://opencode.ai/zen/go/v1', apiKeyEntries: [] },
         ],
       },
-      []
+      [{ name: 'meta-account.json', type: 'meta' }]
     );
+    // A Muse login is its own account provider, not one more OpenCode Go key.
+    expect(
+      providers.find((provider) => provider.oauth && provider.channel === 'meta')
+    ).toMatchObject({
+      name: 'Muse (Meta)',
+      files: [{ name: 'meta-account.json' }],
+    });
     const merged = providers.filter((provider) => !provider.oauth);
     expect(merged).toHaveLength(1);
     expect(merged[0]).toMatchObject({
