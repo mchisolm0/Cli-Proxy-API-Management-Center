@@ -1,4 +1,4 @@
-import type { FailureClass, Problem, ProviderHealth } from '@/services/history';
+import type { FailureClass, Problem } from '@/services/history';
 import type { AuthFileItem } from '@/types';
 import { summarizeCooldowns } from '@/features/authFiles/cooldowns';
 import {
@@ -13,7 +13,7 @@ export type Attention = {
   id: string;
   provider: string;
   category: FailureClass;
-  reason: 'auth' | 'quota' | 'quota_high' | 'cooldown' | 'unavailable' | 'problem' | 'traffic';
+  reason: 'auth' | 'quota' | 'quota_high' | 'cooldown' | 'unavailable' | 'problem';
   file?: AuthFileItem;
   /** The window behind a quota_high warning. */
   window?: QuotaWindow;
@@ -24,10 +24,17 @@ export type Attention = {
 /** Client cancels and unclassified errors are not something the pool owner can fix. */
 const actionable = (category: FailureClass) => category !== 'client' && category !== 'other';
 
+/** Failures older than this stay on the Problems page instead of the home alerts. */
+export const ALERT_WINDOW_MS = 60 * 60 * 1000;
+
+/** A failure the client saw (not retried away by the proxy) in the last hour. */
+const stillFailing = (problem: Problem, now: number) =>
+  problem.inferredFinalFailures + problem.unresolvedAttempts > 0 &&
+  now - problem.lastSeen <= ALERT_WINDOW_MS;
+
 export function deriveAttention(
   files: AuthFileItem[],
   problems: Problem[],
-  health: ProviderHealth[],
   now: number,
   quotaByCredential: Record<string, QuotaWindow[]> = {}
 ): Attention[] {
@@ -76,7 +83,7 @@ export function deriveAttention(
     if (high) attention.push({ ...base, reason: 'quota_high', category: 'quota', window: high });
   }
   for (const problem of problems) {
-    if (problem.count <= 0 || !actionable(problem.category)) continue;
+    if (!actionable(problem.category) || !stillFailing(problem, now)) continue;
     const provider = workspaceChannel(problem.provider);
     // Credential state gives a more specific fix than an aggregate auth/quota group.
     if (
@@ -95,26 +102,7 @@ export function deriveAttention(
       category: problem.category,
       reason: 'problem',
       problem,
-      count: problem.count,
-    });
-  }
-  for (const traffic of health) {
-    const provider = workspaceChannel(traffic.provider);
-    if (
-      !traffic.failures ||
-      attention.some((item) => item.provider === provider && item.reason !== 'quota_high')
-    )
-      continue;
-    const category = (Object.entries(traffic.errorCounts) as [FailureClass, number][])
-      .filter(([key, count]) => count > 0 && actionable(key))
-      .sort((a, b) => b[1] - a[1])[0]?.[0];
-    if (!category) continue;
-    attention.push({
-      id: `traffic:${provider}`,
-      provider,
-      category,
-      reason: 'traffic',
-      count: traffic.errorCounts[category],
+      count: problem.inferredFinalFailures + problem.unresolvedAttempts,
     });
   }
   // Blocking states first, early quota warnings last.

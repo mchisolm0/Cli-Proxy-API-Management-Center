@@ -223,7 +223,6 @@ function usePoolData() {
       deriveAttention(
         data.files,
         data.problems?.problems ?? [],
-        data.health?.providers ?? [],
         now,
         Object.fromEntries(data.files.map((file) => [credentialId(file), quotaForFile(file)]))
       ).map((item) => {
