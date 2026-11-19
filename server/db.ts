@@ -5,6 +5,7 @@ import type { Session, Item } from "./model";
 import { telemetryTables } from "./telemetry/events";
 import { authTables } from "./auth";
 import { frictionTables } from "./friction";
+import { limitTables } from "./limits";
 
 export type SessionRow = Omit<Session, "items"> & {
   id: number;
@@ -57,6 +58,7 @@ export function openIndex(path: string, busyTimeout = 5000) {
   `);
   telemetryTables(db);
   authTables(db);
+  limitTables(db);
   frictionTables(db);
   return db;
 }

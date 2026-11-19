@@ -3,6 +3,7 @@ import type { HealthResponse, ProblemsResponse, Problem, QuotaObservation } from
 import type { SessionRow } from './db';
 import { json, object, string, number } from './model';
 import { authStates, authIssues, type AuthTransition } from './auth';
+import { limitKey, probedLimits } from './limits';
 import { classify, sanitize, type ErrorClass } from './telemetry/events';
 
 const windows = { '1h': 3600000, '24h': 86400000, '7d': 604800000 };
@@ -181,7 +182,8 @@ export function health(db: Database, window: string | null, now = Date.now()): H
   const since = windowStart(window, now),
     usage = events(db, 'usage_event', since, now),
     errors = events(db, 'error_event', since, now),
-    states = authStates(db);
+    states = authStates(db),
+    limits = probedLimits(db);
   const providers = [
     ...new Set([
       ...usage.map((e) => e.provider),
@@ -221,6 +223,7 @@ export function health(db: Database, window: string | null, now = Date.now()): H
               }
             : null,
           observed: state?.observed || 0,
+          limits: limits.get(limitKey(provider, authIndex)) ?? [],
           ...aggregate(
             u.filter((r) => r.authIndex === authIndex),
             e.filter((r) => r.authIndex === authIndex)

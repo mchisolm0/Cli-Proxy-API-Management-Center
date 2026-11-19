@@ -48,6 +48,8 @@ export type CredentialHealth = Traffic & {
   /** Epoch ms of the latest auth-files observation. */
   observed: number;
   state: CredentialState | null;
+  /** Subscription windows asked of the provider itself, where headers carry none. */
+  limits: { window: string; minutes: number; used: number; resetsAt: number }[];
 };
 
 export type ProviderHealth = Traffic & {
