@@ -9,6 +9,7 @@ import { search } from './search';
 import { startTelemetry } from './telemetry';
 import { dashboardProblem, managementKey, redactionSecrets, startAuthPoller } from './auth';
 import { ingestFriction } from './friction';
+import { startLimitPoller } from './limits';
 import { health, problems, parseRetryWindow } from './insights';
 import { seedFixtures } from './fixtures';
 import type { FiltersResponse, SessionDetail, RawRecordResponse } from './api';
@@ -258,8 +259,10 @@ export function startDashboard(env = process.env) {
       console.warn('Telemetry could not start; check address and management key configuration');
     }
   }
-  if (env.CPA_BASE_URL && (env.CPA_MANAGEMENT_KEY_FILE || env.CPA_MANAGEMENT_KEY))
+  if (env.CPA_BASE_URL && (env.CPA_MANAGEMENT_KEY_FILE || env.CPA_MANAGEMENT_KEY)) {
     stops.push(startAuthPoller(db, env.CPA_BASE_URL, loadKey));
+    stops.push(startLimitPoller(db, env.CPA_BASE_URL, loadKey));
+  }
   if (env.FRICTION_PATHS) {
     const paths = env.FRICTION_PATHS;
     const ingest = () => background(() => ingestFriction(db, paths), 'Friction ingestion failed');
